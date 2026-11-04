@@ -73,7 +73,7 @@ jobs:
       # Gradle's published checksums (wrapper-attack class). Submodule wrappers
       # aren't executed by CI, so the root jar is the one that matters.
       - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c  # v6.4.1
+        uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6  # v6.4.0
 
   # rdp-kotlin's Rust suite had no CI step at all, so it was gated by whoever
   # last remembered to run it by hand. Not hypothetical: the #422 test
@@ -220,7 +220,6 @@ jobs:
           -PskipWaylandNatives=true
           -PskipFfmpegNatives=true
           -PskipUml=true
-          -Pkotlin.compiler.execution.strategy=in-process
       - name: Run sshlib contract tests (non-gating, connectbot/cbssh#245)
         # Reported, never silent: a failure here is visible in the job summary
         # and the uploaded results, it just does not fail the build. If these
@@ -339,11 +338,7 @@ jobs:
         # -PtargetAbi drives core/wayland's buildWaylandNatives, which builds the
         # five arm64-only wayland binaries from the submodule instead of shipping
         # committed copies. This job is what proves they still compile (#493).
-        # -Pkotlin.compiler.execution.strategy=in-process prevents a separate 3 GB
-        # Kotlin daemon JVM from sitting alongside the 8 GB Gradle daemon while
-        # gomobile bind + cargo-ndk compile in parallel on 16 GB runners (same
-        # fix as release.yml).
-        run: ./gradlew :app:assembleArm64FullDebug -PtargetAbi=arm64 -PskipUml=true -Pkotlin.compiler.execution.strategy=in-process
+        run: ./gradlew :app:assembleArm64FullDebug -PtargetAbi=arm64 -PskipUml=true
         # -PskipUml: the UML guest binaries are 79 MB release-asset fetches;
         # the release workflow proves the fetch, CI doesn't need it per push.
       # Runs here rather than in `checks` because it reads the built binaries,
@@ -383,7 +378,7 @@ jobs:
       - uses: ./.github/actions/init-submodules-with-retry
       - uses: ./.github/actions/setup-toolchain
       - name: Build ${{ matrix.abi }} debug APK
-        run: ./gradlew :app:assemble${{ matrix.variant }}FullDebug -PtargetAbi=${{ matrix.abi }} -PskipUml=true -Pkotlin.compiler.execution.strategy=in-process
+        run: ./gradlew :app:assemble${{ matrix.variant }}FullDebug -PtargetAbi=${{ matrix.abi }} -PskipUml=true
 
   # Debug builds don't run R8, so an R8 rename of a reflectively-loaded class
   # can ship a feature 100% broken in release while every debug check stays
