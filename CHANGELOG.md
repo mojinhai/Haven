@@ -5,6 +5,26 @@ the corresponding GitHub Release; a release can't ship without its section
 (enforced by `scripts/check-changelog.sh` in CI). The GitHub "Full Changelog"
 compare link is appended automatically — don't add it here.
 
+## v5.94.9
+
+- Forward attached OpenSSH certificates (`certificateBytes`, including Step CA-minted certificates) on software SSH keys when SSH agent forwarding is enabled, matching the FIDO2 and security-chip agent-forwarding paths.
+
+## v5.94.8
+
+- Fix `dosbox-staging` startup in UML guest app windows by configuring `output=texture` with `texture_renderer=software`, installing `mesa-dri-gallium` and `wayland-libs-egl` in the Alpine `dosbox` Guest App Pack, and exporting `HOME=/root`, `SDL_AUDIODRIVER=dummy`, and `ALSOFT_DRIVERS=null` in UML kiosk launch scripts.
+
+## v5.94.7
+
+- Add curated classic computer emulator Guest App Packs (**DOSBox** for x86 MS-DOS, **FS-UAE** for Commodore Amiga 500/1200 with built-in AROS Kickstart replacement, and **VICE (`x64sc`)** for Commodore 64) pre-configured with PulseAudio output and software rendering, and surface `GuestAppCatalog` packs as one-tap installs in **Desktop → Manage → App windows**.
+
+## v5.94.6
+
+- Move **Import rclone config…** into **New connection → Cloud Storage (rclone)** and remove the top-bar `⋮` overflow menu and global-looking Tunnels icon from the Connections screen, since tunnels are configured per-connection under **Route through** (#251, thanks @pixel4696).
+
+## v5.94.5
+
+- Add external display (`android.app.Presentation`) projection for VNC (local and remote) and RDP sessions: when an HDMI, USB-C DisplayPort, or wireless presentation display is connected, the remote desktop and cursor render on the external monitor while the phone canvas blanks to black (`#000000`) to save battery and continues acting as the trackpad and keyboard input surface, with a toolbar toggle (`Tv` icon) to switch between the external monitor and the phone screen (#790, thanks @pixel4696).
+
 ## v5.94.4
 
 - Fix a `SecurityException` crash when launching **Attach → Take a photo** or camera QR/OCR scanning before `android.permission.CAMERA` has been granted at runtime.
