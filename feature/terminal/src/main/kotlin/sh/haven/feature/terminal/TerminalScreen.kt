@@ -106,6 +106,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import sh.haven.core.ui.KeyEventInterceptor
+import sh.haven.core.ui.repairBrokenFocusChain
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -601,21 +602,20 @@ fun TerminalScreen(
     // renders the folder picker) → upload → inject the shell-quoted
     // path/URL at the cursor. The runAttachFlow launches on the VM scope
     // so it survives the screen leaving composition while the user
-    // navigates the picker.
+    // navigates the picker. Multi-select: every pick uploads into the one
+    // folder chosen on the Files tab and all the paths are pasted together.
     val attachLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
         val activeProfileId = viewModel.tabs.value
             .getOrNull(viewModel.activeTabIndex.value)?.profileId
-        val (fileName, fileSize) = viewModel.attachCoordinator.queryFileInfo(uri)
+        val files = uris.map { uri ->
+            val (fileName, fileSize) = viewModel.attachCoordinator.queryFileInfo(uri)
+            sh.haven.feature.sftp.attach.TerminalAttachCoordinator.AttachFile(uri, fileName, fileSize)
+        }
         onNavigateToSftp()
-        viewModel.runAttachFlow(
-            sourceUri = uri,
-            fileName = fileName,
-            fileSize = fileSize,
-            initialProfileId = activeProfileId,
-        )
+        viewModel.runAttachFlow(files = files, initialProfileId = activeProfileId)
     }
 
     // #604: Dictate key. Launches the system speech recognizer directly
@@ -683,9 +683,9 @@ fun TerminalScreen(
                 val (fileName, fileSize) = viewModel.attachCoordinator.queryFileInfo(uri)
                 onNavigateToSftp()
                 viewModel.runAttachFlow(
-                    sourceUri = uri,
-                    fileName = fileName,
-                    fileSize = fileSize,
+                    files = listOf(
+                        sh.haven.feature.sftp.attach.TerminalAttachCoordinator.AttachFile(uri, fileName, fileSize),
+                    ),
                     initialProfileId = activeProfileId,
                 )
             }
@@ -918,6 +918,7 @@ fun TerminalScreen(
             // The toolbar's keyboard key and the double-tap gesture still raise
             // it deliberately, so typing is never blocked — only the surprise.
             if (!physicalKeyboardAttached && autoShowKeyboardInTerminal) {
+                repairBrokenFocusChain(window.decorView)
                 controller.show(WindowInsetsCompat.Type.ime())
             }
         } else if (!isActive) {
@@ -2077,6 +2078,9 @@ fun TerminalScreen(
                                     if (imeShowing) {
                                         controller.hide(WindowInsetsCompat.Type.ime())
                                     } else {
+                                        // A no-op requestFocus() on a stranded
+                                        // ImeInputView leaves the IME unserved.
+                                        repairBrokenFocusChain(rootView)
                                         focusRequester.requestFocus()
                                         controller.show(WindowInsetsCompat.Type.ime())
                                     }
