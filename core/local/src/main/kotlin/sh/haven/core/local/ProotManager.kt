@@ -504,6 +504,150 @@ internal fun desktopPackagesToRemove(
 }
 
 /**
+ * Stateful parser that extracts human-readable step labels and `[0.0, 1.0]`
+ * progress fractions from `pacman`, `apt-get`, `apk`, and `xbps-install`
+ * stdout lines during desktop package installation (#814).
+ */
+internal class PackageInstallProgressTracker {
+    var totalPackages: Int = 0
+        private set
+    private var downloadedCount: Int = 0
+    private var installedCount: Int = 0
+
+    fun onLine(rawLine: String): Pair<String, Float?>? {
+        val line = rawLine.trim()
+        if (line.isEmpty()) return null
+
+        // 1. Explicit `(i/N) ...` prefix (apk: `(12/45) Installing foo (1.0)`,
+        //    pacman TTY/hooks: `(12/85) installing foo`, `(1/4) Arming...`)
+        FRACTION_PREFIX_REGEX.matchEntire(line)?.let { m ->
+            val cur = m.groupValues[1].toIntOrNull() ?: return@let
+            val tot = m.groupValues[2].toIntOrNull()?.takeIf { it > 0 } ?: return@let
+            val rest = m.groupValues[3].trim()
+            val lower = rest.lowercase()
+            return when {
+                lower.startsWith("installing ") || lower.startsWith("upgrading ") || lower.startsWith("reinstalling ") -> {
+                    val isApk = rest.startsWith("Installing ") || rest.startsWith("Upgrading ")
+                    val pkg = rest.substringAfter(' ').substringBefore(' ').removeSuffix("...").trim()
+                    val frac = if (isApk) {
+                        (cur.toFloat() / tot.toFloat()).coerceIn(0.05f, 0.98f)
+                    } else {
+                        (0.50f + 0.45f * (cur.toFloat() / tot.toFloat())).coerceIn(0.50f, 0.95f)
+                    }
+                    "Installing $pkg ($cur/$tot)..." to frac
+                }
+                else -> null
+            }
+        }
+
+        // 2. Pacman output lines
+        if (line.startsWith(":: Synchronizing package databases")) {
+            return "Synchronizing package databases..." to 0.02f
+        }
+        PACMAN_PACKAGES_HEADER_REGEX.find(line)?.let { m ->
+            val count = m.groupValues[1].toIntOrNull() ?: 0
+            if (count > 0) {
+                totalPackages = count
+                downloadedCount = 0
+                installedCount = 0
+                return "Resolving $count packages..." to 0.05f
+            }
+        }
+        if (line.startsWith(":: Retrieving packages")) {
+            return "Downloading packages..." to 0.08f
+        }
+        if (rawLine.startsWith(" ") && line.endsWith(" downloading...")) {
+            val pkg = line.removeSuffix(" downloading...").trim()
+            downloadedCount++
+            val frac = if (totalPackages > 0) {
+                (0.08f + 0.42f * (downloadedCount.toFloat() / totalPackages).coerceAtMost(1f))
+            } else {
+                null
+            }
+            val suffix = if (totalPackages > 0) " ($downloadedCount/$totalPackages)" else ""
+            return "Downloading $pkg$suffix..." to frac
+        }
+        if (line.startsWith("installing ") || line.startsWith("upgrading ") || line.startsWith("reinstalling ")) {
+            val pkg = line.substringAfter(' ').removeSuffix("...").trim()
+            installedCount++
+            val frac = if (totalPackages > 0) {
+                (0.50f + 0.45f * (installedCount.toFloat() / totalPackages).coerceAtMost(1f))
+            } else {
+                null
+            }
+            val suffix = if (totalPackages > 0) " ($installedCount/$totalPackages)" else ""
+            return "Installing $pkg$suffix..." to frac
+        }
+        if (line.startsWith(":: Running post-transaction hooks")) {
+            return "Running post-install hooks..." to 0.96f
+        }
+
+        // 3. APT (`apt-get`) output lines
+        APT_SUMMARY_REGEX.find(line)?.let { m ->
+            val upg = m.groupValues[1].toIntOrNull() ?: 0
+            val newly = m.groupValues[2].toIntOrNull() ?: 0
+            val sum = upg + newly
+            if (sum > 0) {
+                totalPackages = sum
+                downloadedCount = 0
+                installedCount = 0
+                return "Downloading $sum packages..." to 0.05f
+            }
+        }
+        APT_GET_REGEX.find(line)?.let { m ->
+            val idx = m.groupValues[1].toIntOrNull() ?: 0
+            val pkg = m.groupValues[2]
+            if (idx > downloadedCount) downloadedCount = idx
+            val frac = if (totalPackages > 0) {
+                (0.05f + 0.45f * (downloadedCount.toFloat() / totalPackages).coerceAtMost(1f))
+            } else {
+                null
+            }
+            val suffix = if (totalPackages > 0) " ($downloadedCount/$totalPackages)" else ""
+            return "Downloading $pkg$suffix..." to frac
+        }
+        if (line.startsWith("Unpacking ")) {
+            val pkg = line.removePrefix("Unpacking ").substringBefore(' ').substringBefore(':').trim()
+            installedCount++
+            val frac = if (totalPackages > 0) {
+                (0.50f + 0.25f * (installedCount.toFloat() / totalPackages).coerceAtMost(1f))
+            } else {
+                null
+            }
+            val suffix = if (totalPackages > 0) " ($installedCount/$totalPackages)" else ""
+            return "Unpacking $pkg$suffix..." to frac
+        }
+        if (line.startsWith("Setting up ")) {
+            val pkg = line.removePrefix("Setting up ").substringBefore(' ').substringBefore(':').trim()
+            return "Setting up $pkg..." to 0.85f
+        }
+
+        // 4. XBPS (`xbps-install`) output lines
+        if (line.contains("[*] Downloading binary packages")) {
+            return "Downloading packages..." to 0.10f
+        }
+        if (line.contains("[*] Verifying package integrity")) {
+            return "Verifying package integrity..." to 0.45f
+        }
+        if (line.contains("[*] Unpacking packages")) {
+            return "Unpacking packages..." to 0.65f
+        }
+        if (line.contains("[*] Configuring unpacked packages")) {
+            return "Configuring packages..." to 0.85f
+        }
+
+        return null
+    }
+
+    companion object {
+        private val FRACTION_PREFIX_REGEX = Regex("""^\((\d+)/(\d+)\)\s+(.+)$""")
+        private val PACMAN_PACKAGES_HEADER_REGEX = Regex("""^Packages?\s+\((\d+)\)""")
+        private val APT_SUMMARY_REGEX = Regex("""(\d+)\s+upgraded,\s+(\d+)\s+newly installed""")
+        private val APT_GET_REGEX = Regex("""^Get:(\d+)\s+\S+\s+\S+\s+(?:(?:amd64|arm64|armhf|i386|all)\s+)?(\S+)""")
+    }
+}
+
+/**
  * Manages the PRoot binary and Alpine Linux rootfs.
  *
  * PRoot is bundled as libproot.so in jniLibs (extracted to nativeLibraryDir
@@ -662,9 +806,10 @@ class ProotManager @Inject constructor(
 
     /**
      * #301: when off, the local proot shell no longer binds `/storage` and
-     * `/storage/emulated/0` into the guest, so the guest can't see the user's
-     * photos/downloads. Default on (preserves the original behaviour where the
-     * guest reaches shared files via `/storage` and `/sdcard`).
+     * the active Android user's emulated storage (`/storage/emulated/<user>`)
+     * into the guest, so the guest can't see the user's photos/downloads.
+     * Default on (preserves the original behaviour where the guest reaches
+     * shared files via `/storage` and `/sdcard`).
      */
     val shareStorageWithGuestFlow: StateFlow<Boolean> = _shareStorageWithGuest.asStateFlow()
     val shareStorageWithGuest: Boolean get() = _shareStorageWithGuest.value
@@ -875,10 +1020,24 @@ class ProotManager @Inject constructor(
         validCustomBinds(distroId).flatMap { listOf("-b", it.spec()) }
 
     /**
+     * Active Android user's primary shared storage path (e.g. `/storage/emulated/0`
+     * on the primary profile, or `/storage/emulated/11` on Android user 11, #825).
+     */
+    fun userEmulatedStoragePath(): String =
+        resolveUserEmulatedStoragePath(
+            envExternalStoragePath = runCatching {
+                android.os.Environment.getExternalStorageDirectory()?.absolutePath
+            }.getOrNull(),
+            filesDirPath = runCatching { context.filesDir.absolutePath }.getOrNull(),
+            uid = runCatching { android.system.Os.getuid() }.getOrNull(),
+        )
+
+    /**
      * Shared-storage binds as proot short-form args (`-b spec …`), or empty when
      * the user has opted out ([shareStorageWithGuest], default on). Binds Android's
-     * `/storage` plus a `/sdcard` alias (#256) so the guest reaches the user's
-     * files; needs Haven's storage permission for content to actually show.
+     * `/storage` plus a `/sdcard` alias (#256) pointing at the current Android
+     * user's emulated storage (#825) so the guest reaches the user's files; needs
+     * Haven's storage permission for content to actually show.
      *
      * Centralised here because EVERY proot launch path that should expose storage
      * must add the identical binds — the interactive shell had them but the desktop
@@ -886,19 +1045,19 @@ class ProotManager @Inject constructor(
      * manager saw an empty `/sdcard` (#420).
      */
     fun storageBindShortArgs(): List<String> =
-        if (shareStorageWithGuest) {
-            listOf("-b", "/storage", "-b", "/storage/emulated/0:/sdcard")
-        } else {
-            emptyList()
-        }
+        buildStorageBindArgs(
+            shareStorageWithGuest = shareStorageWithGuest,
+            longForm = false,
+            emulatedStoragePath = userEmulatedStoragePath(),
+        )
 
     /** Shared-storage binds as proot long-form args (`--bind=spec`); see [storageBindShortArgs]. */
     fun storageBindLongArgs(): List<String> =
-        if (shareStorageWithGuest) {
-            listOf("--bind=/storage", "--bind=/storage/emulated/0:/sdcard")
-        } else {
-            emptyList()
-        }
+        buildStorageBindArgs(
+            shareStorageWithGuest = shareStorageWithGuest,
+            longForm = true,
+            emulatedStoragePath = userEmulatedStoragePath(),
+        )
 
     /** Custom binds for [distroId] as proot long-form args (`--bind=spec`); see [customBindShortArgs] for the #760 drop. */
     fun customBindLongArgs(distroId: String): List<String> =
@@ -1392,7 +1551,11 @@ class ProotManager @Inject constructor(
          * replaced every other desktop's controls with a spinner — they all
          * looked like they had been started too (#502).
          */
-        data class Installing(val step: String, val de: DesktopEnvironment? = null) : DesktopSetupState()
+        data class Installing(
+            val step: String,
+            val de: DesktopEnvironment? = null,
+            val progress: Float? = null,
+        ) : DesktopSetupState()
         data object Complete : DesktopSetupState()
         /**
          * Failure attributed to a specific [DePhase]. [logTail] is
@@ -3353,9 +3516,15 @@ class ProotManager @Inject constructor(
 
     /**
      * Run a command inside the PRoot rootfs (non-interactive).
-     * Returns (stdout+stderr, exitCode).
+     * Returns (stdout+stderr, exitCode). When [onLine] is provided and
+     * [timeoutMs] is null, each line of combined output is streamed to
+     * [onLine] as it arrives (#814).
      */
-    suspend fun runCommandInProot(command: String, timeoutMs: Long? = null): Pair<String, Int> =
+    suspend fun runCommandInProot(
+        command: String,
+        timeoutMs: Long? = null,
+        onLine: ((String) -> Unit)? = null,
+    ): Pair<String, Int> =
         withContext(Dispatchers.IO) {
             val process = startCommandInProot(command)
             if (timeoutMs == null) {
@@ -3363,7 +3532,16 @@ class ProotManager @Inject constructor(
                 // package install would turn a slow network into a failure,
                 // which is a worse trade than waiting; #503 is only fixed for
                 // the step that is already best-effort.
-                val output = process.inputStream.bufferedReader().readText()
+                val output = if (onLine == null) {
+                    process.inputStream.bufferedReader().readText()
+                } else {
+                    val sb = StringBuilder()
+                    process.inputStream.bufferedReader().forEachLine { line ->
+                        sb.append(line).append('\n')
+                        onLine(line)
+                    }
+                    sb.toString()
+                }
                 Pair(output, process.waitFor())
             } else {
                 val run = readProcessBounded(process, timeoutMs)
@@ -3462,7 +3640,10 @@ class ProotManager @Inject constructor(
      * long apt install surfaced through an async MCP job) read the stream
      * themselves; [runCommandInProot] is the read-to-completion wrapper.
      */
-    fun startCommandInProot(command: String): Process {
+    fun startCommandInProot(command: String): Process =
+        startCommandInProot(command, GuestUserSpec.ROOT)
+
+    fun startCommandInProot(command: String, guestUser: GuestUserSpec): Process {
         val prootBin = prootBinary ?: throw IllegalStateException("PRoot not available")
         // Refresh the guest resolver before every guest command (#446). This is the
         // path package installs run through — the exact thing that hangs when
@@ -3499,8 +3680,8 @@ class ProotManager @Inject constructor(
             // bundled — otherwise an empty spread.
             *qemuUserArgs(activeDistroId).toTypedArray(),
             "--rootfs=$rootfsPath",
-            "--root-id",
-            "--cwd=/root",
+            guestUser.prootLongIdentityArg,
+            "--cwd=${guestUser.home}",
             "--bind=/dev",
             "--bind=/dev/urandom:/dev/random",
             // Writable /dev/shm — Android's /dev (bound above) is read-only and
@@ -3528,13 +3709,14 @@ class ProotManager @Inject constructor(
             // (and MCP run_in_proot) sees the same mounts as the shell/desktop.
             *customBindLongArgs(activeDistroId).toTypedArray(),
             "/usr/bin/env", "-i",
-            "HOME=/root",
+            "HOME=${guestUser.home}",
+            "USER=${guestUser.username}",
+            "LOGNAME=${guestUser.username}",
             "LANG=C.UTF-8",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "TERM=xterm-256color",
             "TMPDIR=/tmp",
-            "GLYCIN_DISABLE_SANDBOX=i-know-the-risks",
-            "ELECTRON_DISABLE_SANDBOX=1",
+            *PROOT_SANDBOX_ENV.toTypedArray(),
             *guestTunnelEnvVars().map { (k, v) -> "$k=$v" }.toTypedArray(),
             "/bin/sh", "-lc", command,
         )
@@ -3673,8 +3855,19 @@ class ProotManager @Inject constructor(
         pkgs: List<String>,
         de: DesktopEnvironment? = null,
     ): Pair<String, Int> {
+        val prefix = de?.label?.let { "$it: " } ?: ""
+        val tracker = PackageInstallProgressTracker()
+        val onLine: (String) -> Unit = { line ->
+            tracker.onLine(line)?.let { (step, progress) ->
+                _desktopState.value = DesktopSetupState.Installing(
+                    step = "$prefix$step",
+                    de = de,
+                    progress = progress,
+                )
+            }
+        }
         val installCmd = "${ops.updateCmd()} && ${ops.installCmd(pkgs)}"
-        val (output, code) = runCommandInProot(installCmd)
+        val (output, code) = runCommandInProot(installCmd, onLine = onLine)
         if (code == 0 || !ops.looksLikeStaleDb(output)) {
             return Pair(output, code)
         }
@@ -3683,9 +3876,33 @@ class ProotManager @Inject constructor(
             "Refreshing package database (one-time upgrade)…",
             de,
         )
-        val (upgOut, upgCode) = runCommandInProot(ops.upgradeCmd())
+        val upgradeTracker = PackageInstallProgressTracker()
+        val (upgOut, upgCode) = runCommandInProot(
+            ops.upgradeCmd(),
+            onLine = { line ->
+                upgradeTracker.onLine(line)?.let { (step, progress) ->
+                    _desktopState.value = DesktopSetupState.Installing(
+                        step = "${prefix}Upgrading base system: $step",
+                        de = de,
+                        progress = progress,
+                    )
+                }
+            },
+        )
         Log.d(TAG, "Auto-upgrade exit=$upgCode tail=${upgOut.takeLast(300)}")
-        return runCommandInProot(installCmd)
+        val retryTracker = PackageInstallProgressTracker()
+        return runCommandInProot(
+            installCmd,
+            onLine = { line ->
+                retryTracker.onLine(line)?.let { (step, progress) ->
+                    _desktopState.value = DesktopSetupState.Installing(
+                        step = "$prefix$step",
+                        de = de,
+                        progress = progress,
+                    )
+                }
+            },
+        )
     }
 
     /**
@@ -4794,6 +5011,28 @@ chmod +x /root/.vnc/xstartup""")
         }
 
         /**
+         * Sandbox environment overrides injected into PRoot shells, commands, and
+         * desktop sessions (#718, #780, #827):
+         * - `GLYCIN_DISABLE_SANDBOX=i-know-the-risks`: disables gdk-pixbuf2/glycin's
+         *   `bwrap --unshare-all --seccomp` SVG loader inside PRoot (#718).
+         * - `ELECTRON_DISABLE_SANDBOX=1`: disables Chromium/Electron user-namespace/SUID
+         *   sandbox inside PRoot (#780).
+         * - `MOZ_DISABLE_*_SANDBOX=1`: disables Mozilla's seccomp-bpf child-process
+         *   sandboxes (`Content`, `GMP`, `RDD`, `Socket`, `Utility`), which SIGSEGV
+         *   immediately under `qemu-user` foreign-arch emulation (e.g. `archlinux-x86_64`
+         *   in Sway) and fail when `LD_PRELOAD` shims are active (#827).
+         */
+        val PROOT_SANDBOX_ENV: List<String> = listOf(
+            "GLYCIN_DISABLE_SANDBOX=i-know-the-risks",
+            "ELECTRON_DISABLE_SANDBOX=1",
+            "MOZ_DISABLE_CONTENT_SANDBOX=1",
+            "MOZ_DISABLE_GMP_SANDBOX=1",
+            "MOZ_DISABLE_RDD_SANDBOX=1",
+            "MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1",
+            "MOZ_DISABLE_UTILITY_SANDBOX=1",
+        )
+
+        /**
          * Disable apt's `_apt` privilege-drop sandbox inside [rootfsDir] (#721).
          * Under PRoot on Android (especially secondary users / Work Profiles where
          * host UID >= 65536, or non-root guest sessions), apt's `DropPrivileges()`
@@ -4803,6 +5042,8 @@ chmod +x /root/.vnc/xstartup""")
          * methods without switching UIDs. No-op on non-APT rootfses.
          */
         fun ensureAptSandboxConfig(rootfsDir: File) {
+            ensureGuestMachineId(rootfsDir)
+            ensureSandboxProfileHook(rootfsDir)
             ensureTunnelGuestHelper(rootfsDir)
             val aptConfD = File(rootfsDir, "etc/apt/apt.conf.d")
             if (!aptConfD.isDirectory) return
@@ -4812,6 +5053,61 @@ chmod +x /root/.vnc/xstartup""")
                 runCatching {
                     confFile.setWritable(true, true)
                     confFile.writeText(content)
+                }
+            }
+        }
+
+        /**
+         * Ensure `/etc/machine-id` contains a valid 32-hex-character ID inside [rootfsDir] (#827).
+         * Container and PRoot rootfs tarballs ship an empty or missing `/etc/machine-id`,
+         * which causes D-Bus auto-launch inside GTK/Mozilla apps to fail with
+         * `Cannot spawn a message bus without a machine-id`.
+         */
+        fun ensureGuestMachineId(rootfsDir: File) {
+            if (!File(rootfsDir, "etc").isDirectory &&
+                !File(rootfsDir, "bin").exists() &&
+                !File(rootfsDir, "usr").exists()
+            ) {
+                return
+            }
+            runCatching {
+                val etcDir = File(rootfsDir, "etc").apply { mkdirs() }
+                val machineIdFile = File(etcDir, "machine-id")
+                val existing = if (machineIdFile.isFile) {
+                    runCatching { machineIdFile.readText().trim() }.getOrDefault("")
+                } else {
+                    ""
+                }
+                val isValidHex32 = existing.length == 32 &&
+                    existing.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+                if (!isValidHex32) {
+                    val generated = java.util.UUID.randomUUID().toString().replace("-", "").lowercase() + "\n"
+                    machineIdFile.setWritable(true, true)
+                    machineIdFile.writeText(generated)
+                }
+            }
+        }
+
+        /**
+         * Ensure `/etc/profile.d/haven-sandbox.sh` exists in [rootfsDir] (#827) so
+         * already-installed distros inherit [PROOT_SANDBOX_ENV] even across `su -` or
+         * `sudo -i` login shells that clear inherited environment variables.
+         */
+        fun ensureSandboxProfileHook(rootfsDir: File) {
+            if (!File(rootfsDir, "bin").exists() && !File(rootfsDir, "usr").exists()) return
+            runCatching {
+                val profileD = File(rootfsDir, "etc/profile.d").apply { mkdirs() }
+                val hook = File(profileD, "haven-sandbox.sh")
+                val hookContent = buildString {
+                    appendLine("# Haven PRoot sandbox environment hook (#718, #780, #827).")
+                    for (entry in PROOT_SANDBOX_ENV) {
+                        val key = entry.substringBefore('=')
+                        val value = entry.substringAfter('=')
+                        appendLine("export $key=\"\${$key:-$value}\"")
+                    }
+                }
+                if (!hook.exists() || runCatching { hook.readText() }.getOrNull() != hookContent) {
+                    hook.writeText(hookContent)
                 }
             }
         }
@@ -4877,6 +5173,20 @@ chmod +x /root/.vnc/xstartup""")
             }
         }
 
+        private fun copyMissingRecursively(src: File, dst: File) {
+            if (java.nio.file.Files.isSymbolicLink(src.toPath())) return
+            if (src.isDirectory) {
+                if (!dst.exists()) dst.mkdirs()
+                if (!dst.isDirectory) return
+                src.listFiles()?.forEach { child ->
+                    copyMissingRecursively(child, File(dst, child.name))
+                }
+            } else if (src.isFile && !dst.exists()) {
+                dst.parentFile?.mkdirs()
+                src.copyTo(dst, overwrite = false)
+            }
+        }
+
         /**
          * Ensure [rawUsername] (uid 1000 / gid 1000) is provisioned in [rootfsDir]'s
          * `/etc/passwd`, `/etc/group`, `/etc/shadow`, `/etc/sudoers.d/<user>`,
@@ -4899,12 +5209,15 @@ chmod +x /root/.vnc/xstartup""")
 
             // Seed default configs from /root into /home/<user> if missing so X11/Wayland
             // desktops find their seeded .config and .vnc files when launched as non-root.
+            // Merge recursively without overwriting existing user files so desktops
+            // installed after the user's home was created (e.g. Sway after Xfce4) still
+            // populate their default config (#827).
             val rootHome = File(rootfsDir, "root")
             for (sub in listOf(".config", ".vnc")) {
                 val src = File(rootHome, sub)
                 val dst = File(homeDir, sub)
-                if (src.exists() && !dst.exists()) {
-                    runCatching { src.copyRecursively(dst, overwrite = false) }
+                if (src.exists()) {
+                    runCatching { copyMissingRecursively(src, dst) }
                 }
             }
 
@@ -5139,4 +5452,74 @@ internal fun readProcessBounded(
     reader.join(drainGraceMs)
     val exit = if (finished) runCatching { process.exitValue() }.getOrDefault(-1) else -1
     return BoundedRun(out.toString(), exit, timedOut = !finished)
+}
+
+private val DATA_USER_PATH_REGEX = Regex("""^/data/user(?:_de)?/(\d+)(?:/|$)""")
+private const val ANDROID_PER_USER_UID_RANGE = 100_000
+
+/**
+ * Extract the Android multi-user profile ID (`0` for the primary owner, `10+`
+ * for work profiles and secondary users, #825) from the app's data directory
+ * path (`/data/user/<id>/...` or `/data/user_de/<id>/...`) or Linux UID
+ * (`uid / 100000`).
+ */
+internal fun resolveAndroidUserId(
+    filesDirPath: String? = null,
+    uid: Int? = null,
+): Int {
+    if (!filesDirPath.isNullOrBlank()) {
+        DATA_USER_PATH_REGEX.find(filesDirPath.trim())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?.let { return it }
+    }
+    if (uid != null && uid >= 0) {
+        return uid / ANDROID_PER_USER_UID_RANGE
+    }
+    return 0
+}
+
+/**
+ * Resolve the active Android user's primary shared storage path (#825).
+ *
+ * Returns `/storage/emulated/<userId>` (e.g. `/storage/emulated/11` for Android
+ * user 11) so PRoot binds the current user's storage at `/sdcard` instead of
+ * hardcoding `/storage/emulated/0` (which fails with `EACCES` under secondary
+ * users and work profiles).
+ */
+internal fun resolveUserEmulatedStoragePath(
+    envExternalStoragePath: String? = null,
+    filesDirPath: String? = null,
+    uid: Int? = null,
+): String {
+    val userId = resolveAndroidUserId(filesDirPath = filesDirPath, uid = uid)
+    val userEmulated = "/storage/emulated/$userId"
+    val cleanedEnv = envExternalStoragePath
+        ?.trim()
+        ?.trimEnd('/')
+        ?.takeIf { it.startsWith("/") && it.isNotEmpty() }
+    return when {
+        cleanedEnv == null -> userEmulated
+        userId > 0 && (cleanedEnv == "/storage/emulated/0" || cleanedEnv == "/sdcard") -> userEmulated
+        else -> cleanedEnv
+    }
+}
+
+/**
+ * Build PRoot shared-storage bind arguments (`-b /storage -b <emulated>:/sdcard`
+ * or `--bind=/storage --bind=<emulated>:/sdcard`, #825).
+ */
+internal fun buildStorageBindArgs(
+    shareStorageWithGuest: Boolean,
+    longForm: Boolean,
+    emulatedStoragePath: String,
+): List<String> {
+    if (!shareStorageWithGuest) return emptyList()
+    val hostPath = emulatedStoragePath.trim().trimEnd('/').ifEmpty { "/storage/emulated/0" }
+    return if (longForm) {
+        listOf("--bind=/storage", "--bind=$hostPath:/sdcard")
+    } else {
+        listOf("-b", "/storage", "-b", "$hostPath:/sdcard")
+    }
 }
