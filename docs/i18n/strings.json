@@ -8835,6 +8835,128 @@
       "sr": "Нема слике у остави",
       "zh": "剪贴板中没有图片"
      }
+    },
+    {
+     "name": "chat_new_session",
+     "en": "New chat",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "محادثة جديدة",
+      "bn": "নতুন চ্যাট",
+      "de": "Neuer Chat",
+      "es": "Nuevo chat",
+      "fr": "Nouvelle discussion",
+      "hi": "नई चैट",
+      "ja": "新しいチャット",
+      "ko": "새 채팅",
+      "pt": "Novo chat",
+      "ru": "Новый чат",
+      "sr": "Нови разговор",
+      "zh": "新对话"
+     }
+    },
+    {
+     "name": "chat_history_title",
+     "en": "Saved conversations",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "المحادثات المحفوظة",
+      "bn": "সংরক্ষিত কথোপকথন",
+      "de": "Gespeicherte Unterhaltungen",
+      "es": "Conversaciones guardadas",
+      "fr": "Conversations enregistrées",
+      "hi": "सहेजी गई बातचीत",
+      "ja": "保存済みの会話",
+      "ko": "저장된 대화",
+      "pt": "Conversas salvas",
+      "ru": "Сохранённые диалоги",
+      "sr": "Сачувани разговори",
+      "zh": "已保存的对话"
+     }
+    },
+    {
+     "name": "chat_history_empty",
+     "en": "No saved conversations yet",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "لا توجد محادثات محفوظة بعد",
+      "bn": "এখনও কোনো সংরক্ষিত কথোপকথন নেই",
+      "de": "Noch keine gespeicherten Unterhaltungen",
+      "es": "Aún no hay conversaciones guardadas",
+      "fr": "Aucune conversation enregistrée pour le moment",
+      "hi": "अभी तक कोई सहेजी गई बातचीत नहीं है",
+      "ja": "保存済みの会話はまだありません",
+      "ko": "저장된 대화가 없습니다",
+      "pt": "Nenhuma conversa salva ainda",
+      "ru": "Сохранённых диалогов пока нет",
+      "sr": "Још нема сачуваних разговора",
+      "zh": "暂无已保存的对话"
+     }
+    },
+    {
+     "name": "chat_delete_conversation",
+     "en": "Delete conversation",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "حذف المحادثة",
+      "bn": "কথোপকথন মুছুন",
+      "de": "Unterhaltung löschen",
+      "es": "Eliminar conversación",
+      "fr": "Supprimer la conversation",
+      "hi": "बातचीत हटाएं",
+      "ja": "会話を削除",
+      "ko": "대화 삭제",
+      "pt": "Excluir conversa",
+      "ru": "Удалить диалог",
+      "sr": "Обриши разговор",
+      "zh": "删除对话"
+     }
+    },
+    {
+     "name": "chat_search_models",
+     "en": "Search or enter model ID",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "ابحث أو أدخل معرّف النموذج",
+      "bn": "মডেল খুঁজুন বা আইডি লিখুন",
+      "de": "Modell suchen oder ID eingeben",
+      "es": "Buscar o introducir ID del modelo",
+      "fr": "Rechercher ou saisir l\\'ID du modèle",
+      "hi": "मॉडल खोजें या आईडी दर्ज करें",
+      "ja": "モデルを検索またはIDを入力",
+      "ko": "모델 검색 또는 ID 입력",
+      "pt": "Pesquisar ou inserir ID do modelo",
+      "ru": "Поиск или ввод ID модели",
+      "sr": "Претражите или унесите ID модела",
+      "zh": "搜索或输入模型 ID"
+     }
+    },
+    {
+     "name": "chat_use_custom_model",
+     "en": "Use \"%1$s\"",
+     "comment": "",
+     "args": [
+      "%1$s"
+     ],
+     "t": {
+      "ar": "استخدام \"%1$s\"",
+      "bn": "\"%1$s\" ব্যবহার করুন",
+      "de": "\"%1$s\" verwenden",
+      "es": "Usar \"%1$s\"",
+      "fr": "Utiliser \"%1$s\"",
+      "hi": "\"%1$s\" का उपयोग करें",
+      "ja": "\"%1$s\" を使用",
+      "ko": "\"%1$s\" 사용",
+      "pt": "Usar \"%1$s\"",
+      "ru": "Использовать \"%1$s\"",
+      "sr": "Користи \"%1$s\"",
+      "zh": "使用 \"%1$s\""
+     }
     }
    ]
   },
@@ -12105,22 +12227,22 @@
     },
     {
      "name": "connections_field_username_vnc",
-     "en": "Username (optional — VeNCrypt only)",
+     "en": "Username (optional — VeNCrypt or macOS account)",
      "comment": "Group header",
      "args": [],
      "t": {
-      "ar": "اسم المستخدم (اختياري — VeNCrypt فقط)",
-      "bn": "ব্যবহারকারীর নাম (ঐচ্ছিক — শুধু VeNCrypt)",
-      "de": "Benutzername (optional — nur VeNCrypt)",
-      "es": "Usuario (opcional — solo VeNCrypt)",
-      "fr": "Nom d\\'utilisateur (facultatif — VeNCrypt uniquement)",
-      "hi": "उपयोगकर्ता नाम (वैकल्पिक — केवल VeNCrypt)",
-      "ja": "ユーザー名（任意 — VeNCryptのみ）",
-      "ko": "사용자 이름(선택 사항 — VeNCrypt 전용)",
-      "pt": "Usuário (opcional — apenas VeNCrypt)",
-      "ru": "Имя пользователя (необязательно — только VeNCrypt)",
-      "sr": "Корисничко име (није обавезно — само за VeNCrypt)",
-      "zh": "用户名（可选 — 仅 VeNCrypt）"
+      "ar": "اسم المستخدم (اختياري — VeNCrypt أو حساب macOS)",
+      "bn": "ব্যবহারকারীর নাম (ঐচ্ছিক — VeNCrypt বা macOS অ্যাকাউন্ট)",
+      "de": "Benutzername (optional — VeNCrypt oder macOS-Konto)",
+      "es": "Usuario (opcional — VeNCrypt o cuenta de macOS)",
+      "fr": "Nom d\\'utilisateur (facultatif — VeNCrypt ou compte macOS)",
+      "hi": "उपयोगकर्ता नाम (वैकल्पिक — VeNCrypt या macOS खाता)",
+      "ja": "ユーザー名（任意 — VeNCryptまたはmacOSアカウント）",
+      "ko": "사용자 이름(선택 사항 — VeNCrypt 또는 macOS 계정)",
+      "pt": "Usuário (opcional — VeNCrypt ou conta do macOS)",
+      "ru": "Имя пользователя (необязательно — VeNCrypt или учётная запись macOS)",
+      "sr": "Корисничко име (није обавезно — VeNCrypt или macOS налог)",
+      "zh": "用户名（可选 — VeNCrypt 或 macOS 账户）"
      }
     },
     {
@@ -16878,7 +17000,7 @@
     },
     {
      "name": "connections_field_openai_host_hint",
-     "en": "IP, hostname, or a full http:// URL",
+     "en": "IP, hostname, or a full http:// or https:// URL",
      "comment": "Import rclone.conf (#251)",
      "args": [],
      "t": {
@@ -18284,22 +18406,22 @@
     },
     {
      "name": "connections_helper_vnc_auth",
-     "en": "Leave username blank for classic VncAuth (8-char password). Fill username for VeNCrypt (wayvnc, TigerVNC) — supports longer passwords and TLS encryption.",
+     "en": "Leave username blank for classic VncAuth (8-char password). Fill username for VeNCrypt (wayvnc, TigerVNC) — supports longer passwords and TLS encryption. For macOS Screen Sharing, enter your macOS account name and password to share your own desktop.",
      "comment": "Connection edit dialog: remaining field labels, toggles and helper text.",
      "args": [],
      "t": {
-      "ar": "اترك اسم المستخدم فارغًا لـ VncAuth الكلاسيكي (كلمة مرور من 8 أحرف). املأ اسم المستخدم لـ VeNCrypt (wayvnc وTigerVNC) — يدعم كلمات مرور أطول وتشفير TLS.",
-      "bn": "ক্লাসিক VncAuth (৮-অক্ষরের পাসওয়ার্ড) এর জন্য ব্যবহারকারীর নাম খালি রাখুন। VeNCrypt (wayvnc, TigerVNC) এর জন্য ব্যবহারকারীর নাম পূরণ করুন — দীর্ঘ পাসওয়ার্ড এবং TLS এনক্রিপশন সমর্থন করে।",
-      "de": "Benutzername für klassisches VncAuth (8-Zeichen-Passwort) leer lassen. Benutzername für VeNCrypt (wayvnc, TigerVNC) ausfüllen — unterstützt längere Passwörter und TLS-Verschlüsselung.",
-      "es": "Deja el usuario en blanco para VncAuth clásico (contraseña de 8 caracteres). Rellena el usuario para VeNCrypt (wayvnc, TigerVNC): admite contraseñas más largas y cifrado TLS.",
-      "fr": "Laissez le nom d\\'utilisateur vide pour le VncAuth classique (mot de passe de 8 caractères). Renseignez le nom d\\'utilisateur pour VeNCrypt (wayvnc, TigerVNC) — prend en charge des mots de passe plus longs et le chiffrement TLS.",
-      "hi": "क्लासिक VncAuth (8-वर्ण पासवर्ड) के लिए उपयोगकर्ता नाम खाली छोड़ें। VeNCrypt (wayvnc, TigerVNC) के लिए उपयोगकर्ता नाम भरें — लंबे पासवर्ड और TLS एन्क्रिप्शन का समर्थन करता है।",
-      "ja": "従来のVncAuth（8文字のパスワード）にはユーザー名を空欄のままにします。VeNCrypt（wayvnc、TigerVNC）にはユーザー名を入力します — より長いパスワードとTLS暗号化に対応します。",
-      "ko": "기본 VncAuth(8자 비밀번호)는 사용자 이름을 비워 두세요. VeNCrypt(wayvnc, TigerVNC)는 사용자 이름을 입력하세요 — 더 긴 비밀번호와 TLS 암호화를 지원합니다.",
-      "pt": "Deixe o usuário em branco para o VncAuth clássico (senha de 8 caracteres). Preencha o usuário para VeNCrypt (wayvnc, TigerVNC) — suporta senhas mais longas e criptografia TLS.",
-      "ru": "Оставьте имя пользователя пустым для классического VncAuth (8-символьный пароль). Заполните имя пользователя для VeNCrypt (wayvnc, TigerVNC) — поддерживает более длинные пароли и TLS-шифрование.",
-      "sr": "Оставите корисничко име празно за класични VncAuth (лозинка од 8 карактера). Попуните корисничко име за VeNCrypt (wayvnc, TigerVNC) — подржава дуже лозинке и TLS шифровање.",
-      "zh": "经典 VncAuth（8 字符密码）请将用户名留空。VeNCrypt（wayvnc、TigerVNC）请填写用户名 — 支持更长的密码和 TLS 加密。"
+      "ar": "اترك اسم المستخدم فارغًا لـ VncAuth الكلاسيكي (كلمة مرور من 8 أحرف). املأ اسم المستخدم لـ VeNCrypt (wayvnc وTigerVNC) — يدعم كلمات مرور أطول وتشفير TLS. لمشاركة الشاشة في macOS، أدخل اسم حساب macOS وكلمة مروره لمشاركة سطح المكتب الخاص بك.",
+      "bn": "ক্লাসিক VncAuth (৮-অক্ষরের পাসওয়ার্ড) এর জন্য ব্যবহারকারীর নাম খালি রাখুন। VeNCrypt (wayvnc, TigerVNC) এর জন্য ব্যবহারকারীর নাম পূরণ করুন — দীর্ঘ পাসওয়ার্ড এবং TLS এনক্রিপশন সমর্থন করে। macOS স্ক্রিন শেয়ারিংয়ের জন্য, নিজের ডেস্কটপ শেয়ার করতে আপনার macOS অ্যাকাউন্টের নাম ও পাসওয়ার্ড দিন।",
+      "de": "Benutzername für klassisches VncAuth (8-Zeichen-Passwort) leer lassen. Benutzername für VeNCrypt (wayvnc, TigerVNC) ausfüllen — unterstützt längere Passwörter und TLS-Verschlüsselung. Für die macOS-Bildschirmfreigabe Namen und Passwort des macOS-Kontos eingeben, um den eigenen Desktop zu teilen.",
+      "es": "Deja el usuario en blanco para VncAuth clásico (contraseña de 8 caracteres). Rellena el usuario para VeNCrypt (wayvnc, TigerVNC): admite contraseñas más largas y cifrado TLS. Para Compartir pantalla de macOS, introduce el nombre y la contraseña de tu cuenta de macOS para compartir tu propio escritorio.",
+      "fr": "Laissez le nom d\\'utilisateur vide pour le VncAuth classique (mot de passe de 8 caractères). Renseignez le nom d\\'utilisateur pour VeNCrypt (wayvnc, TigerVNC) — prend en charge des mots de passe plus longs et le chiffrement TLS. Pour le Partage d\\'écran de macOS, saisissez le nom et le mot de passe de votre compte macOS afin de partager votre propre bureau.",
+      "hi": "क्लासिक VncAuth (8-वर्ण पासवर्ड) के लिए उपयोगकर्ता नाम खाली छोड़ें। VeNCrypt (wayvnc, TigerVNC) के लिए उपयोगकर्ता नाम भरें — लंबे पासवर्ड और TLS एन्क्रिप्शन का समर्थन करता है। macOS स्क्रीन शेयरिंग के लिए, अपना डेस्कटॉप साझा करने हेतु अपने macOS खाते का नाम और पासवर्ड दर्ज करें।",
+      "ja": "従来のVncAuth（8文字のパスワード）にはユーザー名を空欄のままにします。VeNCrypt（wayvnc、TigerVNC）にはユーザー名を入力します — より長いパスワードとTLS暗号化に対応します。macOSの画面共有では、macOSのアカウント名とパスワードを入力すると自分のデスクトップを共有できます。",
+      "ko": "기본 VncAuth(8자 비밀번호)는 사용자 이름을 비워 두세요. VeNCrypt(wayvnc, TigerVNC)는 사용자 이름을 입력하세요 — 더 긴 비밀번호와 TLS 암호화를 지원합니다. macOS 화면 공유의 경우 macOS 계정 이름과 비밀번호를 입력하면 내 데스크톱을 공유할 수 있습니다.",
+      "pt": "Deixe o usuário em branco para o VncAuth clássico (senha de 8 caracteres). Preencha o usuário para VeNCrypt (wayvnc, TigerVNC) — suporta senhas mais longas e criptografia TLS. Para o Compartilhamento de Tela do macOS, informe o nome e a senha da sua conta do macOS para compartilhar sua própria área de trabalho.",
+      "ru": "Оставьте имя пользователя пустым для классического VncAuth (8-символьный пароль). Заполните имя пользователя для VeNCrypt (wayvnc, TigerVNC) — поддерживает более длинные пароли и TLS-шифрование. Для общего экрана macOS укажите имя и пароль своей учётной записи macOS, чтобы открыть собственный рабочий стол.",
+      "sr": "Оставите корисничко име празно за класични VncAuth (лозинка од 8 карактера). Попуните корисничко име за VeNCrypt (wayvnc, TigerVNC) — подржава дуже лозинке и TLS шифровање. За дељење екрана на macOS-у унесите име и лозинку свог macOS налога да бисте делили сопствену радну површину.",
+      "zh": "经典 VncAuth（8 字符密码）请将用户名留空。VeNCrypt（wayvnc、TigerVNC）请填写用户名 — 支持更长的密码和 TLS 加密。连接 macOS 屏幕共享时，填写 macOS 账户名和登录密码，即可共享你自己的桌面。"
      }
     },
     {
@@ -38512,6 +38634,46 @@
       "sr": "Увек",
       "zh": "总是"
      }
+    },
+    {
+     "name": "settings_root_files_title",
+     "en": "Root (/) file browser",
+     "comment": "Opt-in Root (/) filesystem tab (#799)",
+     "args": [],
+     "t": {
+      "ar": "متصفح ملفات الجذر Root (/)",
+      "bn": "Root (/) ফাইল ব্রাউজার",
+      "de": "Root-(/)-Dateibrowser",
+      "es": "Explorador de archivos Root (/)",
+      "fr": "Explorateur de fichiers Root (/)",
+      "hi": "Root (/) फ़ाइल ब्राउज़र",
+      "ja": "Root (/) ファイルブラウザー",
+      "ko": "Root (/) 파일 브라우저",
+      "pt": "Navegador de arquivos Root (/)",
+      "ru": "Файловый менеджер Root (/)",
+      "sr": "Root (/) прегледач датотека",
+      "zh": "Root (/) 文件浏览器"
+     }
+    },
+    {
+     "name": "settings_root_files_subtitle",
+     "en": "Show a Root (/) tab in Files that requests su only when opened. Off by default and isolated from MCP tools.",
+     "comment": "Opt-in Root (/) filesystem tab (#799)",
+     "args": [],
+     "t": {
+      "ar": "إظهار علامة تبويب Root (/) في الملفات تطلب صلاحية su فقط عند فتحها. معطل افتراضياً ومعزول عن أدوات MCP.",
+      "bn": "Files-এ একটি Root (/) ট্যাব দেখায় যা কেবল খোলা হলেই su অনুরোধ করে। ডিফল্টভাবে বন্ধ এবং MCP টুল থেকে বিচ্ছিন্ন।",
+      "de": "Zeigt in Dateien einen Tab „Root (/)“ an, der erst beim Öffnen su anfordert. Standardmäßig deaktiviert und von MCP-Werkzeugen isoliert.",
+      "es": "Muestra una pestaña Root (/) en Archivos que solicita su solo al abrirse. Desactivado por defecto y aislado de las herramientas MCP.",
+      "fr": "Afficher un onglet Root (/) dans Fichiers qui ne demande su qu\\'à l\\'ouverture. Désactivé par défaut et isolé des outils MCP.",
+      "hi": "फ़ाइलों में एक Root (/) टैब दिखाएँ जो केवल खोले जाने पर ही su का अनुरोध करता है। डिफ़ॉल्ट रूप से बंद और MCP टूल्स से अलग।",
+      "ja": "ファイル画面に「Root (/)」タブを表示し、開いたときのみ su を要求します。既定ではオフで、MCP ツールからは分離されています。",
+      "ko": "파일 화면에 열었을 때만 su를 요청하는 Root (/) 탭을 표시합니다. 기본적으로 꺼져 있으며 MCP 도구와 격리됩니다.",
+      "pt": "Mostrar uma aba Root (/) em Arquivos que solicita su apenas ao ser aberta. Desativado por padrão e isolado das ferramentas MCP.",
+      "ru": "Показывать вкладку Root (/) в «Файлах», запрашивающую su только при открытии. Выключено по умолчанию и изолировано от инструментов MCP.",
+      "sr": "Прикажи картицу Root (/) у Датотекама која захтева su тек када се отвори. Подразумевано искључено и изоловано од MCP алата.",
+      "zh": "在“文件”中显示 Root (/) 标签页，仅在打开该标签页时请求 su 权限。默认关闭，并与 MCP 工具隔离。"
+     }
     }
    ]
   },
@@ -40329,6 +40491,50 @@
       "ru": "Директория",
       "sr": "Директоријум",
       "zh": "目录"
+     }
+    },
+    {
+     "name": "sftp_folder_item_count",
+     "en": "%d item",
+     "comment": "FileListItem",
+     "args": [
+      "%d"
+     ],
+     "t": {
+      "ar": "%d عنصر",
+      "bn": "%d আইটেম",
+      "de": "%d Element",
+      "es": "%d elemento",
+      "fr": "%d élément",
+      "hi": "%d आइटम",
+      "ja": "%d項目",
+      "ko": "항목 %d개",
+      "pt": "%d item",
+      "ru": "%d элемент",
+      "sr": "%d ставка",
+      "zh": "%d 项"
+     }
+    },
+    {
+     "name": "sftp_folder_item_count_plural",
+     "en": "%d items",
+     "comment": "FileListItem",
+     "args": [
+      "%d"
+     ],
+     "t": {
+      "ar": "%d عناصر",
+      "bn": "%d আইটেম",
+      "de": "%d Elemente",
+      "es": "%d elementos",
+      "fr": "%d éléments",
+      "hi": "%d आइटम",
+      "ja": "%d項目",
+      "ko": "항목 %d개",
+      "pt": "%d itens",
+      "ru": "%d элементов",
+      "sr": "%d ставки",
+      "zh": "%d 项"
      }
     },
     {
@@ -46603,6 +46809,26 @@
      }
     },
     {
+     "name": "terminal_selection_copy_one_line",
+     "en": "Copy as one line",
+     "comment": "SelectionToolbar button labels and toasts",
+     "args": [],
+     "t": {
+      "ar": "نسخ كسطر واحد",
+      "bn": "এক লাইনে কপি করুন",
+      "de": "Als eine Zeile kopieren",
+      "es": "Copiar en una sola línea",
+      "fr": "Copier sur une seule ligne",
+      "hi": "एक पंक्ति में कॉपी करें",
+      "ja": "1行にしてコピー",
+      "ko": "한 줄로 복사",
+      "pt": "Copiar em uma linha",
+      "ru": "Копировать одной строкой",
+      "sr": "Копирај као један ред",
+      "zh": "复制为一行"
+     }
+    },
+    {
      "name": "terminal_selection_no_url",
      "en": "No URL detected",
      "comment": "SelectionToolbar button labels and toasts",
@@ -49092,6 +49318,146 @@
       "pt": "Colar área de transferência",
       "ru": "Вставить из буфера обмена",
       "zh": "粘贴剪贴板"
+     }
+    },
+    {
+     "name": "vnc_compose_open",
+     "en": "Type text to send",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "اكتب نصًا لإرساله",
+      "bn": "পাঠানোর জন্য লেখা টাইপ করুন",
+      "de": "Text zum Senden eingeben",
+      "es": "Escribir texto para enviar",
+      "fr": "Saisir le texte à envoyer",
+      "hi": "भेजने के लिए टेक्स्ट लिखें",
+      "ja": "送信するテキストを入力",
+      "ko": "보낼 텍스트 입력",
+      "pt": "Digitar texto para enviar",
+      "ru": "Ввести текст для отправки",
+      "sr": "Унесите текст за слање",
+      "zh": "输入要发送的文字"
+     }
+    },
+    {
+     "name": "vnc_compose_placeholder",
+     "en": "Type, check, then send",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "اكتب وتحقق ثم أرسل",
+      "bn": "লিখুন, যাচাই করুন, তারপর পাঠান",
+      "de": "Eingeben, prüfen, dann senden",
+      "es": "Escribe, revisa y envía",
+      "fr": "Saisissez, vérifiez, puis envoyez",
+      "hi": "लिखें, जाँचें, फिर भेजें",
+      "ja": "入力して確認してから送信",
+      "ko": "입력하고 확인한 뒤 보내기",
+      "pt": "Digite, confira e envie",
+      "ru": "Введите, проверьте и отправьте",
+      "sr": "Унесите, проверите, па пошаљите",
+      "zh": "输入并确认后再发送"
+     }
+    },
+    {
+     "name": "vnc_compose_send",
+     "en": "Send",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "إرسال",
+      "bn": "পাঠান",
+      "de": "Senden",
+      "es": "Enviar",
+      "fr": "Envoyer",
+      "hi": "भेजें",
+      "ja": "送信",
+      "ko": "보내기",
+      "pt": "Enviar",
+      "ru": "Отправить",
+      "sr": "Пошаљи",
+      "zh": "发送"
+     }
+    },
+    {
+     "name": "vnc_compose_press_enter",
+     "en": "Press Enter after sending",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "اضغط Enter بعد الإرسال",
+      "bn": "পাঠানোর পরে Enter চাপুন",
+      "de": "Nach dem Senden Enter drücken",
+      "es": "Pulsar Intro tras enviar",
+      "fr": "Appuyer sur Entrée après l\\'envoi",
+      "hi": "भेजने के बाद Enter दबाएँ",
+      "ja": "送信後にEnterを押す",
+      "ko": "보낸 후 Enter 누르기",
+      "pt": "Pressionar Enter após enviar",
+      "ru": "Нажать Enter после отправки",
+      "sr": "Притисни Enter након слања",
+      "zh": "发送后按回车"
+     }
+    },
+    {
+     "name": "vnc_compose_show",
+     "en": "Show text",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "إظهار النص",
+      "bn": "লেখা দেখান",
+      "de": "Text anzeigen",
+      "es": "Mostrar texto",
+      "fr": "Afficher le texte",
+      "hi": "टेक्स्ट दिखाएँ",
+      "ja": "テキストを表示",
+      "ko": "텍스트 표시",
+      "pt": "Mostrar texto",
+      "ru": "Показать текст",
+      "sr": "Прикажи текст",
+      "zh": "显示文字"
+     }
+    },
+    {
+     "name": "vnc_compose_hide",
+     "en": "Hide text",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "إخفاء النص",
+      "bn": "লেখা লুকান",
+      "de": "Text verbergen",
+      "es": "Ocultar texto",
+      "fr": "Masquer le texte",
+      "hi": "टेक्स्ट छिपाएँ",
+      "ja": "テキストを隠す",
+      "ko": "텍스트 숨기기",
+      "pt": "Ocultar texto",
+      "ru": "Скрыть текст",
+      "sr": "Сакриј текст",
+      "zh": "隐藏文字"
+     }
+    },
+    {
+     "name": "vnc_compose_untypeable",
+     "en": "Highlighted characters can\\'t be typed over VNC. Use Paste to send them.",
+     "comment": "",
+     "args": [],
+     "t": {
+      "ar": "لا يمكن كتابة الأحرف المميزة عبر VNC. استخدم اللصق لإرسالها.",
+      "bn": "হাইলাইট করা অক্ষরগুলো VNC-তে টাইপ করা যায় না। পাঠাতে পেস্ট ব্যবহার করুন।",
+      "de": "Hervorgehobene Zeichen lassen sich über VNC nicht tippen. Zum Senden „Einfügen“ verwenden.",
+      "es": "Los caracteres resaltados no se pueden teclear por VNC. Usa Pegar para enviarlos.",
+      "fr": "Les caractères en surbrillance ne peuvent pas être saisis via VNC. Utilisez Coller pour les envoyer.",
+      "hi": "हाइलाइट किए गए अक्षर VNC पर टाइप नहीं हो सकते। उन्हें भेजने के लिए पेस्ट का उपयोग करें।",
+      "ja": "強調表示された文字はVNCで入力できません。貼り付けを使って送信してください。",
+      "ko": "강조 표시된 문자는 VNC로 입력할 수 없습니다. 붙여넣기로 보내세요.",
+      "pt": "Os caracteres destacados não podem ser digitados via VNC. Use Colar para enviá-los.",
+      "ru": "Выделенные символы нельзя ввести через VNC. Используйте «Вставить», чтобы отправить их.",
+      "sr": "Истакнути знакови не могу да се укуцају преко VNC-а. Користите Налепи да бисте их послали.",
+      "zh": "高亮的字符无法通过 VNC 键入，请改用粘贴按钮发送。"
      }
     },
     {

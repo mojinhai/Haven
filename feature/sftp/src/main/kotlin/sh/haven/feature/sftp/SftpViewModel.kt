@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.async
@@ -98,6 +99,10 @@ data class SftpEntry(
      * symlink discovered mid-walk — link cycles must terminate.
      */
     val isSymlink: Boolean = false,
+    /** Direct child item count for directories (including dot-entries), or null when not yet known. */
+    val childCount: Int? = null,
+    /** Direct non-hidden child item count for directories (`!name.startsWith(".")`), or null when not yet known. */
+    val visibleChildCount: Int? = null,
 )
 
 /**
@@ -109,7 +114,7 @@ data class SftpEntry(
  */
 enum class ConvertDestination { DOWNLOADS, SOURCE_FOLDER }
 
-enum class BackendType { SFTP, SMB, RCLONE, LOCAL, SAF }
+enum class BackendType { SFTP, SMB, RCLONE, LOCAL, SAF, ROOT }
 
 /** Clipboard for cross-filesystem copy/move. */
 data class FileClipboard(
@@ -232,6 +237,7 @@ class SftpViewModel @Inject constructor(
     private val attachCoordinator: sh.haven.feature.sftp.attach.TerminalAttachCoordinator,
     private val chatAttachBroker: sh.haven.core.data.attach.ChatAttachBroker,
     private val servedFileTracker: sh.haven.core.data.agent.ServedFileTracker,
+    private val rootFsClient: sh.haven.feature.sftp.root.RootFsClient,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
@@ -253,6 +259,7 @@ class SftpViewModel @Inject constructor(
      */
     fun confirmAttachFolder() {
         val profileId = _activeProfileId.value ?: return
+        if (profileId == "local" || profileId == ROOT_PROFILE_ID) return
         attachCoordinator.confirmFolder(
             profileId = profileId,
             isRclone = _isRcloneProfile.value,
@@ -275,6 +282,7 @@ class SftpViewModel @Inject constructor(
     /** The tapped file confirms the chat pick; only files (not folders) get here. */
     fun confirmChatAttach(entry: SftpEntry) {
         val profileId = _activeProfileId.value ?: return
+        if (profileId == ROOT_PROFILE_ID) return
         chatAttachBroker.confirmPick(profileId, entry.path, entry.name, entry.size)
     }
 
@@ -323,10 +331,14 @@ class SftpViewModel @Inject constructor(
      * Apply an agent-issued UI command to this file browser. Called live from
      * the bus collector and once on subscription to drain a cold-start command
      * the bus latched before this ViewModel existed (see AgentUiCommandBus).
+     *
+     * Agent commands targeting [ROOT_PROFILE_ID] are ignored unconditionally so
+     * MCP UI verbs cannot switch the Files tab onto UID-0 root or trigger `su`.
      */
     private fun handleAgentCommand(command: sh.haven.core.data.agent.AgentUiCommand) {
                     when (command) {
                     is sh.haven.core.data.agent.AgentUiCommand.NavigateToSftpPath -> {
+                        if (command.profileId == ROOT_PROFILE_ID) return
                         if (_activeProfileId.value != command.profileId) {
                             // Pass the target path INTO selectProfile so the
                             // session-open lands there directly. Calling a
@@ -340,6 +352,7 @@ class SftpViewModel @Inject constructor(
                         }
                     }
                     is sh.haven.core.data.agent.AgentUiCommand.OpenConvertDialog -> {
+                        if (command.profileId == ROOT_PROFILE_ID) return
                         if (_activeProfileId.value != command.profileId) {
                             selectProfile(command.profileId)
                         }
@@ -368,6 +381,7 @@ class SftpViewModel @Inject constructor(
                         )
                     }
                     is sh.haven.core.data.agent.AgentUiCommand.OpenInEditor -> {
+                        if (command.profileId == ROOT_PROFILE_ID) return
                         if (_activeProfileId.value != command.profileId) {
                             selectProfile(command.profileId)
                         }
@@ -384,12 +398,14 @@ class SftpViewModel @Inject constructor(
                         openInEditor(entry)
                     }
                     is sh.haven.core.data.agent.AgentUiCommand.EncryptFile -> {
+                        if (command.profileId == ROOT_PROFILE_ID) return
                         if (_activeProfileId.value != command.profileId) {
                             selectProfile(command.profileId)
                         }
                         encryptFile(partialEntry(command.path), command.recipients)
                     }
                     is sh.haven.core.data.agent.AgentUiCommand.DecryptFile -> {
+                        if (command.profileId == ROOT_PROFILE_ID) return
                         if (_activeProfileId.value != command.profileId) {
                             selectProfile(command.profileId)
                         }
@@ -1112,6 +1128,7 @@ class SftpViewModel @Inject constructor(
             "rcloneRemote=$activeRcloneRemote, sftpSession=${sftpSession?.isConnected}, smbClient=${activeSmbClient != null}")
         val backendType = when {
             _isLocalProfile.value -> BackendType.LOCAL
+            _isRootProfile.value -> BackendType.ROOT
             _isRcloneProfile.value -> BackendType.RCLONE
             _isSmbProfile.value -> BackendType.SMB
             _isSafProfile.value -> BackendType.SAF
@@ -1173,6 +1190,25 @@ class SftpViewModel @Inject constructor(
             client.openInputStream(path, if (offset > 0) offset else 0L)
         }
 
+    /**
+     * Range-capable opener for opt-in `Root (/)` files (#799), so unprivileged
+     * `ffmpeg` / external players can read root-owned paths over the loopback
+     * HTTP bridge without direct DAC/SELinux access.
+     */
+    private fun rootOpener(path: String): SftpStreamServer.Opener =
+        SftpStreamServer.Opener { offset ->
+            val backend = kotlinx.coroutines.runBlocking { rootBackendOrNull() }
+                ?: throw java.io.IOException("Root access is disabled")
+            kotlinx.coroutines.runBlocking {
+                backend.openInputStream(path, if (offset > 0) offset else 0L)
+            }
+        }
+
+    private suspend fun rootBackendOrNull(): sh.haven.feature.sftp.transport.RootFileBackend? {
+        if (preferencesRepository.rootFilesEnabled.firstOrNull() != true) return null
+        return sh.haven.feature.sftp.transport.RootFileBackend(rootFsClient)
+    }
+
     private fun guessContentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
         "mp4", "m4v" -> "video/mp4"
         "mkv" -> "video/x-matroska"
@@ -1221,6 +1257,9 @@ class SftpViewModel @Inject constructor(
     /** Tracks whether the active profile is the local filesystem. */
     private val _isLocalProfile = MutableStateFlow(false)
 
+    /** Tracks whether the active profile is the opt-in UID-0 Root (/) filesystem (#799). */
+    private val _isRootProfile = MutableStateFlow(false)
+
     /**
      * Tracks whether the active profile is a SAF "local folder" location (#415).
      * Like [_isLocalProfile] its backend is resolved on demand via
@@ -1236,6 +1275,15 @@ class SftpViewModel @Inject constructor(
         host = "",
         username = "",
         connectionType = "LOCAL",
+    )
+
+    /** Synthetic profile for the opt-in "Root (/)" tab (#799). */
+    private val rootProfile = ConnectionProfile(
+        id = ROOT_PROFILE_ID,
+        label = "Root (/)",
+        host = "",
+        username = "",
+        connectionType = "ROOT",
     )
 
     /** rclone remote name for the active profile. */
@@ -1264,6 +1312,29 @@ class SftpViewModel @Inject constructor(
                 SortMode.NAME_ASC
             }
         }
+        // React to the opt-in Root (/) toggle (#799): shut down any live su
+        // worker and drop back to Local immediately when turned off.
+        viewModelScope.launch {
+            var previous: Boolean? = null
+            preferencesRepository.rootFilesEnabled.collect { enabled ->
+                if (!enabled) {
+                    rootFsClient.shutdown()
+                    profileStateCache.remove(ROOT_PROFILE_ID)
+                    if (_activeProfileId.value == ROOT_PROFILE_ID) {
+                        selectProfile("local")
+                    }
+                }
+                if (previous != null && previous != enabled) {
+                    syncConnectedProfiles()
+                }
+                previous = enabled
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        rootFsClient.shutdownAsync()
     }
 
     fun syncConnectedProfiles() {
@@ -1328,14 +1399,17 @@ class SftpViewModel @Inject constructor(
 
             val profiles = withContext(Dispatchers.IO) { repository.getAll() }
             val remoteProfiles = profiles.filter { it.id in connectedProfileIds }
+            val rootEnabled = preferencesRepository.rootFilesEnabled.firstOrNull() == true
+            val rootProfiles = if (rootEnabled) listOf(rootProfile) else emptyList()
             // SAF "local folder" locations (#415) are always available — the grant
             // is persisted, there's no session to connect — so they show as tabs
-            // unconditionally, right after the synthetic "Local" tab.
+            // unconditionally, right after the synthetic "Local" (and opt-in "Root") tabs.
             val safProfiles = profiles.filter { it.isSaf }
-            _connectedProfiles.value = listOf(localProfile) + safProfiles + remoteProfiles
+            _connectedProfiles.value = listOf(localProfile) + rootProfiles + safProfiles + remoteProfiles
 
             if (connectedProfileIds.isEmpty() && _activeProfileId.value == null) {
-                // No remote connections — auto-select local
+                // No remote connections — auto-select local (never auto-open Root so
+                // su is only requested when the user explicitly taps Root (/)).
                 selectProfile("local")
                 return@launch
             }
@@ -1357,14 +1431,11 @@ class SftpViewModel @Inject constructor(
             }
 
             // Auto-select first connected profile if none selected. SAF "local
-            // folder" profiles (#415) and the synthetic "local" tab are valid
-            // active selections even though they're never in connectedProfileIds
-            // (no session to connect). Without them here, this sweep silently
-            // deselects an active SAF tab back to "local" — and because the tab's
-            // entries stay on screen, the next file op then misroutes to
-            // LocalFileBackend (opening the tree-relative path against the real
-            // filesystem root: EROFS/ENOENT). Device-verified regression.
-            val selectableIds = connectedProfileIds + safProfiles.map { it.id } + "local"
+            // folder" profiles (#415), opt-in "root" (#799), and the synthetic "local"
+            // tab are valid active selections even though they're never in
+            // connectedProfileIds (no remote session to connect). Without them here,
+            // this sweep silently deselects an active SAF/Root tab back to "local".
+            val selectableIds = connectedProfileIds + safProfiles.map { it.id } + rootProfiles.map { it.id } + "local"
             if (_activeProfileId.value == null || _activeProfileId.value !in selectableIds) {
                 _connectedProfiles.value.firstOrNull()?.let { selectProfile(it.id) }
             }
@@ -1455,11 +1526,13 @@ class SftpViewModel @Inject constructor(
         }
 
         val isLocal = profileId == "local"
-        val isSaf = !isLocal && _connectedProfiles.value.find { it.id == profileId }?.isSaf == true
-        val isSmb = !isLocal && smbSessionManager.isProfileConnected(profileId)
-        val isRclone = !isLocal && rcloneSessionManager.isProfileConnected(profileId)
-        val isReticulum = !isLocal && reticulumSessionManager.isProfileConnected(profileId)
+        val isRoot = profileId == ROOT_PROFILE_ID
+        val isSaf = !isLocal && !isRoot && _connectedProfiles.value.find { it.id == profileId }?.isSaf == true
+        val isSmb = !isLocal && !isRoot && smbSessionManager.isProfileConnected(profileId)
+        val isRclone = !isLocal && !isRoot && rcloneSessionManager.isProfileConnected(profileId)
+        val isReticulum = !isLocal && !isRoot && reticulumSessionManager.isProfileConnected(profileId)
         _isLocalProfile.value = isLocal
+        _isRootProfile.value = isRoot
         _isSafProfile.value = isSaf
         _isSmbProfile.value = isSmb
         _isRcloneProfile.value = isRclone
@@ -1477,6 +1550,7 @@ class SftpViewModel @Inject constructor(
         if (cached != null) {
             _currentPath.value = cached.path
             _allEntries.value = cached.allEntries
+            if (isRoot) _activeTransportLabel.value = "Root" else _activeTransportLabel.value = null
             // Re-derive the visible list from the CURRENT global filter (show-hidden /
             // name filter) rather than the list cached when this tab was last active —
             // otherwise the toolbar's show-hidden icon (global) and this tab's contents
@@ -1485,6 +1559,7 @@ class SftpViewModel @Inject constructor(
             // Still need to re-establish the backend connection
             when {
                 isLocal -> { /* no connection needed */ }
+                isRoot -> { /* lazy RootFsClient kept across tab switches */ }
                 isSaf -> { /* backend resolved on demand from the persisted tree Uri */ }
                 isRclone -> {
                     val remoteName = rcloneSessionManager.getRemoteNameForProfile(profileId)
@@ -1515,8 +1590,10 @@ class SftpViewModel @Inject constructor(
             _currentPath.value = landing
             _allEntries.value = emptyList()
             _entries.value = emptyList()
+            if (!isRoot) _activeTransportLabel.value = null
             when {
                 isLocal -> loadDirectoryEntries(landing)
+                isRoot -> loadDirectoryEntries(landing)
                 isSaf -> loadDirectoryEntries(landing)
                 isRclone -> openRcloneAndList(profileId)
                 isSmb -> openSmbAndList(profileId)
@@ -1637,11 +1714,13 @@ class SftpViewModel @Inject constructor(
 
     fun refresh() {
         _activeProfileId.value ?: return
+        folderCountCache.clear()
         loadDirectoryEntries(_currentPath.value)
     }
 
     /** Whether the active profile is the local filesystem. */
     fun isLocalProfile(): Boolean = _isLocalProfile.value
+    fun isRootProfile(): Boolean = _isRootProfile.value
     fun isSmbProfile(): Boolean = _isSmbProfile.value
 
     /** True when the local file browser needs MANAGE_EXTERNAL_STORAGE permission. */
@@ -1679,6 +1758,21 @@ class SftpViewModel @Inject constructor(
                             val client = activeSmbClient ?: throw IllegalStateException("SMB not connected")
                             client.download(entry.path, out) { transferred, total ->
                                 _transferProgress.value = TransferProgress(entry.name, total, transferred)
+                            }
+                        }
+                    } else if (_isRootProfile.value || _isSafProfile.value || _isLocalProfile.value) {
+                        withContext(Dispatchers.IO) {
+                            val backend = currentFileBackend() ?: throw IllegalStateException("Not connected")
+                            backend.openInputStream(entry.path, 0L).use { input ->
+                                val buf = ByteArray(64 * 1024)
+                                var transferred = 0L
+                                while (true) {
+                                    val n = input.read(buf)
+                                    if (n < 0) break
+                                    out.write(buf, 0, n)
+                                    transferred += n
+                                    _transferProgress.value = TransferProgress(entry.name, entry.size, transferred)
+                                }
                             }
                         }
                     } else {
@@ -1765,6 +1859,17 @@ class SftpViewModel @Inject constructor(
                     )
                     ffmpegInput = "http://127.0.0.1:$port$urlPath"
                     Log.d(TAG, "convertFile: streaming SMB via $ffmpegInput")
+                } else if (_isRootProfile.value && !downloadFirst) {
+                    val port = withContext(Dispatchers.IO) { sftpStreamServer.start() }
+                    val urlPath = sftpStreamServer.publish(
+                        path = entry.path,
+                        size = entry.size,
+                        contentType = guessContentType(entry.name),
+                        opener = rootOpener(entry.path),
+                        concurrentSafe = true,
+                    )
+                    ffmpegInput = "http://127.0.0.1:$port$urlPath"
+                    Log.d(TAG, "convertFile: streaming Root via $ffmpegInput")
                 } else if (!downloadFirst) {
                     // SFTP — stream via the loopback bridge too (VISION §2). The
                     // download path below remains the downloadFirst opt-in for a
@@ -1779,7 +1884,7 @@ class SftpViewModel @Inject constructor(
                     ffmpegInput = "http://127.0.0.1:$port$urlPath"
                     Log.d(TAG, "convertFile: streaming SFTP via $ffmpegInput")
                 } else {
-                    // rclone/SFTP/SMB with downloadFirst=true — pull the whole
+                    // rclone/SFTP/SMB/Root with downloadFirst=true — pull the whole
                     // file into cache, then hand the path to ffmpeg.
                     val dlLabel = "\u2B07 Downloading ${entry.name}"
                     _transferProgress.value = TransferProgress(dlLabel, entry.size, 0)
@@ -1795,6 +1900,19 @@ class SftpViewModel @Inject constructor(
                                 val client = activeSmbClient ?: throw IllegalStateException("SMB not connected")
                                 client.download(entry.path, out) { transferred, total ->
                                     _transferProgress.value = TransferProgress(dlLabel, total, transferred)
+                                }
+                            } else if (_isRootProfile.value) {
+                                val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                                root.openInputStream(entry.path, 0L).use { input ->
+                                    val buf = ByteArray(64 * 1024)
+                                    var transferred = 0L
+                                    while (true) {
+                                        val n = input.read(buf)
+                                        if (n < 0) break
+                                        out.write(buf, 0, n)
+                                        transferred += n
+                                        _transferProgress.value = TransferProgress(dlLabel, entry.size, transferred)
+                                    }
                                 }
                             } else {
                                 val session = getOrOpenSession(profileId) ?: throw IllegalStateException("Not connected")
@@ -1928,6 +2046,20 @@ class SftpViewModel @Inject constructor(
                             _isLocalProfile.value -> {
                                 withContext(Dispatchers.IO) {
                                     cacheOutput.copyTo(java.io.File(destPath), overwrite = true)
+                                }
+                                sourceDir
+                            }
+                            _isRootProfile.value -> {
+                                val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                                val uploadLabel = "\u2B06 Saving $outName"
+                                val total = cacheOutput.length()
+                                _transferProgress.value = TransferProgress(uploadLabel, total, 0)
+                                withContext(Dispatchers.IO) {
+                                    cacheOutput.inputStream().use { input ->
+                                        root.writeStream(destPath, input) { written ->
+                                            _transferProgress.value = TransferProgress(uploadLabel, total, written)
+                                        }
+                                    }
                                 }
                                 sourceDir
                             }
@@ -2100,6 +2232,22 @@ class SftpViewModel @Inject constructor(
         _transferProgress.value = TransferProgress(label, entry.size, 0)
         withContext(Dispatchers.IO) {
             when {
+                _isRootProfile.value -> {
+                    val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                    root.openInputStream(entry.path, 0L).use { input ->
+                        cacheTarget.outputStream().use { out ->
+                            val buf = ByteArray(64 * 1024)
+                            var transferred = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                transferred += n
+                                _transferProgress.value = TransferProgress(label, entry.size, transferred)
+                            }
+                        }
+                    }
+                }
                 _isRcloneProfile.value -> {
                     val remote = activeRcloneRemote ?: throw IllegalStateException("Rclone not connected")
                     rcloneClient.copyFile(remote, entry.path, cacheTarget.parent!!, cacheTarget.name)
@@ -2135,6 +2283,18 @@ class SftpViewModel @Inject constructor(
         when {
             _isLocalProfile.value -> withContext(Dispatchers.IO) {
                 cacheFile.copyTo(java.io.File(destPath), overwrite = true)
+            }
+            _isRootProfile.value -> {
+                val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                val len = cacheFile.length()
+                _transferProgress.value = TransferProgress(label, len, 0)
+                withContext(Dispatchers.IO) {
+                    cacheFile.inputStream().use { input ->
+                        root.writeStream(destPath, input) { written ->
+                            _transferProgress.value = TransferProgress(label, len, written)
+                        }
+                    }
+                }
             }
             _isRcloneProfile.value -> {
                 val remote = activeRcloneRemote ?: throw IllegalStateException("Rclone not connected")
@@ -2173,7 +2333,7 @@ class SftpViewModel @Inject constructor(
     /**
      * Persist a media-job event to the ConnectionLog store so its captured
      * ffmpeg stderr + command line is visible in the existing Audit Log UI.
-     * No-op for the synthetic "local" profile since it isn't in the DB and
+     * No-op for the synthetic "local" / "root" profiles since they aren't in the DB and
      * the foreign-key insert would fail.
      *
      * Gated on the user's connectionLoggingEnabled preference — we call the
@@ -2189,7 +2349,7 @@ class SftpViewModel @Inject constructor(
         extra: String?,
     ) {
         val profileId = _activeProfileId.value ?: return
-        if (profileId == "local") return
+        if (profileId == "local" || profileId == ROOT_PROFILE_ID) return
         try {
             connectionLogRepository.logEvent(
                 profileId = profileId,
@@ -2215,10 +2375,22 @@ class SftpViewModel @Inject constructor(
      *  - rclone → loopback HTTP URL via ensureMediaServer
      *  - SFTP → loopback HTTP URL via sftpStreamServer
      *  - SMB → loopback HTTP URL via sftpStreamServer (smbOpener) — VISION §2
+     *  - Root → loopback HTTP URL via sftpStreamServer (rootOpener) — #799
      */
     private suspend fun resolveStreamInput(entry: SftpEntry): String {
         return when {
             _isLocalProfile.value -> entry.path
+            _isRootProfile.value -> {
+                val port = withContext(Dispatchers.IO) { sftpStreamServer.start() }
+                val urlPath = sftpStreamServer.publish(
+                    path = entry.path,
+                    size = entry.size,
+                    contentType = guessContentType(entry.name),
+                    opener = rootOpener(entry.path),
+                    concurrentSafe = true,
+                )
+                "http://127.0.0.1:$port$urlPath"
+            }
             _isRcloneProfile.value -> {
                 val port = ensureMediaServer()
                 val encodedPath = entry.path
@@ -2293,6 +2465,20 @@ class SftpViewModel @Inject constructor(
                     _isLocalProfile.value -> {
                         withContext(Dispatchers.IO) {
                             cacheOutput.copyTo(java.io.File(destPath), overwrite = true)
+                        }
+                        sourceDir
+                    }
+                    _isRootProfile.value -> {
+                        val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                        val uploadLabel = "\u2B06 Saving $outName"
+                        val total = cacheOutput.length()
+                        _transferProgress.value = TransferProgress(uploadLabel, total, 0)
+                        withContext(Dispatchers.IO) {
+                            cacheOutput.inputStream().use { input ->
+                                root.writeStream(destPath, input) { written ->
+                                    _transferProgress.value = TransferProgress(uploadLabel, total, written)
+                                }
+                            }
                         }
                         sourceDir
                     }
@@ -2839,6 +3025,19 @@ class SftpViewModel @Inject constructor(
                         isRemote = true
                         Log.d(TAG, "preparePreview: using SMB HTTP URL $inputSource")
                     }
+                    _isRootProfile.value -> {
+                        val port = withContext(Dispatchers.IO) { sftpStreamServer.start() }
+                        val urlPath = sftpStreamServer.publish(
+                            path = entry.path,
+                            size = entry.size,
+                            contentType = guessContentType(entry.name),
+                            opener = rootOpener(entry.path),
+                            concurrentSafe = true,
+                        )
+                        inputSource = "http://127.0.0.1:$port$urlPath"
+                        isRemote = false
+                        Log.d(TAG, "preparePreview: using Root HTTP URL $inputSource")
+                    }
                     else -> {
                         // SFTP — stream via loopback HTTP so ffmpeg uses Range
                         // requests (probe typically reads just the moov atom,
@@ -3098,6 +3297,11 @@ class SftpViewModel @Inject constructor(
                             client.upload(input, destPath, fileSize) { transferred, total ->
                                 _transferProgress.value = TransferProgress(fileName, total, transferred)
                             }
+                        } else if (_isRootProfile.value) {
+                            val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                            root.writeStream(destPath, input) { transferred ->
+                                _transferProgress.value = TransferProgress(fileName, fileSize, transferred)
+                            }
                         } else if (_isReticulumProfile.value) {
                             // Reticulum has no streaming transport.upload(); route through the
                             // resolved FileBackend (Reticulum SFTP writeBytes, or the exec
@@ -3242,7 +3446,7 @@ class SftpViewModel @Inject constructor(
         // to human-readable names asynchronously via a remote `ls -ld`
         // so the dialog first appears with "1000:1000" and then swaps in
         // "ian:ian" once the lookup returns.
-        if (looksNumeric(seed) && !_isLocalProfile.value && !_isRcloneProfile.value && !_isSmbProfile.value) {
+        if (looksNumeric(seed) && !_isLocalProfile.value && !_isRootProfile.value && !_isRcloneProfile.value && !_isSmbProfile.value) {
             viewModelScope.launch {
                 resolveOwnerName(entry.path)?.let { resolved ->
                     if (_chownRequest.value?.entry == entry) {
@@ -3479,6 +3683,10 @@ class SftpViewModel @Inject constructor(
             _isLocalProfile.value -> withContext(Dispatchers.IO) {
                 android.system.Os.chmod(entry.path, mode)
             }
+            _isRootProfile.value -> {
+                val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                root.chmod(entry.path, mode)
+            }
             _isRcloneProfile.value ->
                 throw UnsupportedOperationException("chmod not supported on rclone remotes")
             _isSmbProfile.value ->
@@ -3492,20 +3700,24 @@ class SftpViewModel @Inject constructor(
 
     /** Whether the active backend understands POSIX permissions. */
     fun supportsPermissions(): Boolean =
-        _isLocalProfile.value || (!_isRcloneProfile.value && !_isSmbProfile.value)
+        _isLocalProfile.value || _isRootProfile.value || (!_isRcloneProfile.value && !_isSmbProfile.value && !_isSafProfile.value)
 
     /**
      * Whether the active backend supports changing ownership. Same set
-     * as [supportsPermissions] minus local files — an unrooted Android
-     * app can't chown outside its own UID.
+     * as [supportsPermissions] minus unprivileged local files — an unrooted
+     * Android app UID can't chown outside its own UID, whereas `Root (/)` can.
      */
     fun supportsOwnership(): Boolean =
-        !_isLocalProfile.value && !_isRcloneProfile.value && !_isSmbProfile.value
+        _isRootProfile.value || (!_isLocalProfile.value && !_isRcloneProfile.value && !_isSmbProfile.value && !_isSafProfile.value)
 
     private suspend fun chownOne(entry: SftpEntry, owner: String) {
         when {
             _isLocalProfile.value ->
                 throw UnsupportedOperationException("chown not supported on local files")
+            _isRootProfile.value -> {
+                val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                root.chown(entry.path, owner)
+            }
             _isRcloneProfile.value ->
                 throw UnsupportedOperationException("chown not supported on rclone remotes")
             _isSmbProfile.value ->
@@ -3655,6 +3867,7 @@ class SftpViewModel @Inject constructor(
                     _isRcloneProfile.value -> BackendType.RCLONE
                     _isSmbProfile.value -> BackendType.SMB
                     _isSafProfile.value -> BackendType.SAF
+                    _isRootProfile.value -> BackendType.ROOT
                     else -> BackendType.SFTP
                 }
                 val ensuredDirs = mutableSetOf<String>()
@@ -3700,6 +3913,11 @@ class SftpViewModel @Inject constructor(
                             val saf = safBackendFor(profileId) ?: throw IllegalStateException("SAF folder unavailable")
                             appContext.contentResolver.openInputStream(item.uri)?.use { input ->
                                 saf.writeStream(destPath, input)
+                            }
+                        } else if (_isRootProfile.value) {
+                            val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                            appContext.contentResolver.openInputStream(item.uri)?.use { input ->
+                                root.writeStream(destPath, input)
                             }
                         } else {
                             val session = getOrOpenSession(profileId) ?: throw IllegalStateException("Not connected")
@@ -3805,12 +4023,20 @@ class SftpViewModel @Inject constructor(
         destType: BackendType,
         destProfileId: String,
         destRemote: String?,
-    ): FileBackend? = when (destType) {
+    ): FileBackend? = backendOverride?.invoke() ?: when (destType) {
         BackendType.LOCAL -> LocalFileBackend(appContext)
+        BackendType.ROOT -> rootBackendOrNull()
         BackendType.SFTP -> getOrOpenSession(destProfileId)?.let { s -> SftpTransport({ s }) }
+            ?: if (destProfileId == _activeProfileId.value) currentFileBackend() else null
         BackendType.SMB -> activeSmbClient?.let { SmbFileBackend(it) }
         BackendType.RCLONE -> destRemote?.let { RcloneFileBackend(rcloneClient, it, appContext) }
         BackendType.SAF -> safBackendFor(destProfileId)
+    }
+
+    private fun getSshConnectionForProfile(profileId: String): sh.haven.core.ssh.SshConnection? {
+        return sessionManager.getSshClientForProfile(profileId)
+            ?: (moshSessionManager.getSshClientForProfile(profileId) as? sh.haven.core.ssh.SshConnection)
+            ?: (etSessionManager.getSshClientForProfile(profileId) as? sh.haven.core.ssh.SshConnection)
     }
 
     /**
@@ -3866,6 +4092,30 @@ class SftpViewModel @Inject constructor(
         return destPath
     }
 
+    private suspend fun probeDestExists(
+        destType: BackendType,
+        destProfileId: String,
+        destRemote: String?,
+        destPath: String,
+    ): Boolean = try {
+        destFileBackend(destType, destProfileId, destRemote)?.stat(destPath) != null
+    } catch (_: Exception) {
+        false
+    }
+
+    private suspend fun findUniqueEntryPath(
+        destType: BackendType,
+        destProfileId: String,
+        destRemote: String?,
+        destPath: String,
+    ): String {
+        for (i in 1..999) {
+            val candidate = uniqueNameCandidate(destPath, i)
+            if (!probeDestExists(destType, destProfileId, destRemote, candidate)) return candidate
+        }
+        return destPath
+    }
+
     /**
      * If [destPath] already exists, suspend until the user picks a [ConflictAction]
      * (unless [batchResolution] is already set by "Apply to all"). Returns null
@@ -3880,6 +4130,7 @@ class SftpViewModel @Inject constructor(
         destProfileId: String,
         destRemote: String?,
         destPath: String,
+        allowResume: Boolean = true,
     ): Pair<ConflictAction, Long>? {
         val destSize = withContext(Dispatchers.IO) {
             probeDestFile(destType, destProfileId, destRemote, destPath)
@@ -3892,7 +4143,7 @@ class SftpViewModel @Inject constructor(
             fileName = entry.name,
             sourceSize = entry.size,
             destSize = destSize,
-            canResume = (destType == BackendType.SFTP || destType == BackendType.LOCAL) &&
+            canResume = allowResume && (destType == BackendType.SFTP || destType == BackendType.LOCAL || destType == BackendType.ROOT) &&
                 destSize in 1 until entry.size,
             onChoice = { action, applyToAll -> deferred.complete(action to applyToAll) },
         )
@@ -3905,7 +4156,7 @@ class SftpViewModel @Inject constructor(
     private fun acquirePasteWakeLock() {
         if (pasteWakeLock?.isHeld == true) return
         try {
-            val pm = appContext.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            val pm = appContext.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
             pasteWakeLock = pm.newWakeLock(
                 android.os.PowerManager.PARTIAL_WAKE_LOCK,
                 "sh.haven.app:paste",
@@ -3913,7 +4164,7 @@ class SftpViewModel @Inject constructor(
                 setReferenceCounted(false)
                 acquire(60 * 60 * 1000L) // 1 hour safety cap; released in finally regardless
             }
-        } catch (e: SecurityException) {
+        } catch (e: Exception) {
             // WAKE_LOCK permission missing (pre-v5.24.11 builds didn't declare
             // it in the manifest). Paste should still work — the wake lock is
             // a stability-on-device nice-to-have, not a correctness dependency.
@@ -3959,6 +4210,9 @@ class SftpViewModel @Inject constructor(
             }
             BackendType.SAF -> { path: String ->
                 safBackendFor(cb.sourceProfileId)?.list(path) ?: emptyList()
+            }
+            BackendType.ROOT -> { path: String ->
+                rootBackendOrNull()?.list(path) ?: emptyList()
             }
         }
 
@@ -4030,6 +4284,9 @@ class SftpViewModel @Inject constructor(
                 BackendType.SAF -> kotlinx.coroutines.runBlocking {
                     safBackendFor(sourceProfileId)?.delete(sourcePath, isDirectory = false)
                 }
+                BackendType.ROOT -> kotlinx.coroutines.runBlocking {
+                    rootBackendOrNull()?.delete(sourcePath, isDirectory = false)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "deleteSourceLeaf failed for $sourcePath: ${e.message}")
@@ -4045,6 +4302,7 @@ class SftpViewModel @Inject constructor(
 
         val destType = when {
             _isLocalProfile.value -> BackendType.LOCAL
+            _isRootProfile.value -> BackendType.ROOT
             _isRcloneProfile.value -> BackendType.RCLONE
             _isSmbProfile.value -> BackendType.SMB
             _isSafProfile.value -> BackendType.SAF
@@ -4060,120 +4318,360 @@ class SftpViewModel @Inject constructor(
             return
         }
 
+        // Same-session SSH/SFTP paste (#798): move via SFTP rename (with
+        // shell `mv -f` fallback across remote mountpoints) and copy via
+        // remote `cp -Rfp` (preserving mtime and permissions) instead of
+        // downloading every file to phone cache and uploading it back.
+        if (cb.sourceBackendType == BackendType.SFTP &&
+            destType == BackendType.SFTP &&
+            cb.sourceProfileId == destProfileId
+        ) {
+            viewModelScope.launch { pasteFromClipboardSameRemoteSsh(cb, destProfileId, destRemote, destPath) }
+            return
+        }
+
         viewModelScope.launch {
-            try {
-                _loading.value = true
-                pasteInProgress.set(true)
-                pasteFileCount.set(0)
-                pasteTotalFiles.set(0)
-                batchResolution = null
-                acquirePasteWakeLock()
-                _transferProgress.value = TransferProgress("Scanning selection…", 0, 0)
+            pasteFromClipboardViaQueue(cb, destType, destProfileId, destRemote, destPath)
+        }
+    }
 
-                val leaves = withContext(Dispatchers.IO) {
-                    enumerateLeaves(cb, destPath)
+    private suspend fun pasteFromClipboardSameRemoteSsh(
+        cb: FileClipboard,
+        destProfileId: String,
+        destRemote: String?,
+        destPath: String,
+    ) {
+        val ssh = getSshConnectionForProfile(destProfileId)
+        if (!cb.isCut && ssh == null) {
+            pasteFromClipboardViaQueue(cb, BackendType.SFTP, destProfileId, destRemote, destPath)
+            return
+        }
+        try {
+            _loading.value = true
+            pasteInProgress.set(true)
+            pasteFileCount.set(0)
+            pasteTotalFiles.set(cb.entries.size)
+            batchResolution = null
+            acquirePasteWakeLock()
+
+            for (entry in cb.entries) {
+                val rawDestPath = destPath.trimEnd('/') + "/" + entry.name
+                if (entry.isDirectory && rawDestPath.startsWith(entry.path.trimEnd('/') + "/")) {
+                    throw java.io.IOException(
+                        "Cannot ${if (cb.isCut) "move" else "copy"} '${entry.name}' into itself"
+                    )
                 }
+            }
 
-                // Apply conflict resolution to top-level leaves (anything a
-                // user directly put on the clipboard). Deeper descendants
-                // inherit the batch-resolution if set, otherwise default to
-                // OVERWRITE — matching the old crossCopyDir behaviour.
-                val resolved = mutableListOf<PasteLeaf>()
-                val actions = mutableListOf<ConflictAction>()
-                val resumeBytes = mutableListOf<Long>()
-                var skipped = 0
-                for (leaf in leaves) {
-                    if (!leaf.isTopLevel) {
-                        resolved.add(leaf)
-                        actions.add(batchResolution ?: ConflictAction.OVERWRITE)
-                        resumeBytes.add(0L)
+            var skipped = 0
+            if (cb.isCut) {
+                val backend = currentFileBackend()
+                    ?: destFileBackend(BackendType.SFTP, destProfileId, destRemote)
+                    ?: cb.sourceSftpSession?.let { SftpTransport({ it }) }
+                    ?: throw IllegalStateException("SFTP not connected")
+                for (entry in cb.entries) {
+                    val rawDestPath = destPath.trimEnd('/') + "/" + entry.name
+                    if (rawDestPath == entry.path) {
+                        skipped++
                         continue
                     }
-                    val virtualEntry = SftpEntry(leaf.sourceName, leaf.sourcePath, false, leaf.size, 0, "")
-                    val check = resolveConflictIfExists(virtualEntry, destType, destProfileId, destRemote, leaf.destPath)
-                    if (check == null) {
+                    var targetPath = rawDestPath
+                    var overwriteExisting = false
+                    if (!entry.isDirectory) {
+                        val check = resolveConflictIfExists(
+                            entry = entry,
+                            destType = BackendType.SFTP,
+                            destProfileId = destProfileId,
+                            destRemote = destRemote,
+                            destPath = rawDestPath,
+                            allowResume = false,
+                        )
+                        if (check != null) {
+                            when (check.first) {
+                                ConflictAction.SKIP -> {
+                                    skipped++
+                                    continue
+                                }
+                                ConflictAction.RENAME -> {
+                                    targetPath = withContext(Dispatchers.IO) {
+                                        findUniqueName(BackendType.SFTP, destProfileId, destRemote, rawDestPath)
+                                    }
+                                }
+                                ConflictAction.OVERWRITE, ConflictAction.RESUME -> {
+                                    overwriteExisting = true
+                                }
+                            }
+                        }
+                    }
+                    val current = pasteFileCount.incrementAndGet()
+                    _transferProgress.value = TransferProgress(
+                        "Moving $current of ${cb.entries.size}: ${entry.name}",
+                        entry.size,
+                        0,
+                    )
+                    withContext(Dispatchers.IO) {
+                        moveRemoteEntry(backend, ssh, entry.path, targetPath, overwriteExisting)
+                    }
+                }
+            } else {
+                val activeSsh = ssh ?: error("ssh required for server-side copy")
+                for (entry in cb.entries) {
+                    val rawDestPath = destPath.trimEnd('/') + "/" + entry.name
+                    val copyDestArg: String
+                    if (!entry.isDirectory) {
+                        if (rawDestPath == entry.path) {
+                            copyDestArg = withContext(Dispatchers.IO) {
+                                findUniqueName(BackendType.SFTP, destProfileId, destRemote, rawDestPath)
+                            }
+                        } else {
+                            val check = resolveConflictIfExists(
+                                entry = entry,
+                                destType = BackendType.SFTP,
+                                destProfileId = destProfileId,
+                                destRemote = destRemote,
+                                destPath = rawDestPath,
+                                allowResume = false,
+                            )
+                            if (check != null) {
+                                when (check.first) {
+                                    ConflictAction.SKIP -> {
+                                        skipped++
+                                        continue
+                                    }
+                                    ConflictAction.RENAME -> {
+                                        copyDestArg = withContext(Dispatchers.IO) {
+                                            findUniqueName(BackendType.SFTP, destProfileId, destRemote, rawDestPath)
+                                        }
+                                    }
+                                    ConflictAction.OVERWRITE, ConflictAction.RESUME -> {
+                                        copyDestArg = rawDestPath
+                                    }
+                                }
+                            } else {
+                                copyDestArg = rawDestPath
+                            }
+                        }
+                    } else {
+                        copyDestArg = if (rawDestPath == entry.path) {
+                            withContext(Dispatchers.IO) {
+                                findUniqueEntryPath(BackendType.SFTP, destProfileId, destRemote, rawDestPath)
+                            }
+                        } else {
+                            destPath.trimEnd('/') + "/"
+                        }
+                    }
+
+                    val current = pasteFileCount.incrementAndGet()
+                    _transferProgress.value = TransferProgress(
+                        "Copying $current of ${cb.entries.size}: ${entry.name}",
+                        entry.size,
+                        0,
+                    )
+                    val fallbackToQueue = withContext(Dispatchers.IO) {
+                        val cmd = "cp -Rfp -- ${sh.haven.core.security.posixShellQuote(entry.path)} " +
+                            sh.haven.core.security.posixShellQuote(copyDestArg)
+                        val r = try {
+                            activeSsh.execCommand(cmd)
+                        } catch (e: Exception) {
+                            if (current == 1) return@withContext true
+                            throw e
+                        }
+                        if (r.exitStatus != 0) {
+                            if (current == 1 && isShellExecRefused(r.exitStatus, r.stderr)) {
+                                return@withContext true
+                            }
+                            throw java.io.IOException(
+                                r.stderr.trim().ifEmpty { "cp failed (exit ${r.exitStatus})" }
+                            )
+                        }
+                        false
+                    }
+                    if (fallbackToQueue) {
+                        Log.i(TAG, "Remote shell cp unavailable on $destProfileId; falling back to SFTP stream copy")
+                        pasteFromClipboardViaQueue(cb, BackendType.SFTP, destProfileId, destRemote, destPath)
+                        return
+                    }
+                }
+            }
+
+            _clipboard.value = null
+            val done = pasteFileCount.get()
+            val verb = if (cb.isCut) "Moved" else "Copied"
+            _message.value = if (skipped > 0) "$verb $done files — skipped $skipped" else "$verb $done files"
+            refresh()
+        } catch (e: Exception) {
+            Log.e(TAG, "Same-remote SSH paste failed", e)
+            _error.value = "Paste failed: ${e.message}"
+        } finally {
+            pasteInProgress.set(false)
+            _loading.value = false
+            _transferProgress.value = null
+            _conflictPrompt.value = null
+            batchResolution = null
+            releasePasteWakeLock()
+        }
+    }
+
+    private suspend fun moveRemoteEntry(
+        backend: FileBackend,
+        ssh: sh.haven.core.ssh.SshConnection?,
+        fromPath: String,
+        toPath: String,
+        deleteExistingTargetFirst: Boolean,
+    ) {
+        try {
+            if (deleteExistingTargetFirst) {
+                try {
+                    backend.delete(toPath, isDirectory = false)
+                } catch (_: Exception) {
+                    // Best-effort before SFTP rename
+                }
+            }
+            backend.rename(fromPath, toPath)
+        } catch (renameErr: Exception) {
+            if (ssh == null) throw renameErr
+            val cmd = "mv -f -- ${sh.haven.core.security.posixShellQuote(fromPath)} " +
+                sh.haven.core.security.posixShellQuote(toPath)
+            val r = ssh.execCommand(cmd)
+            if (r.exitStatus != 0) {
+                throw java.io.IOException(
+                    r.stderr.trim().ifEmpty { renameErr.message ?: "mv failed" },
+                    renameErr,
+                )
+            }
+        }
+    }
+
+    private fun isShellExecRefused(exitStatus: Int, stderr: String): Boolean {
+        if (exitStatus == 126 || exitStatus == 127) return true
+        if (exitStatus == 1 && stderr.isBlank()) return true
+        val lower = stderr.lowercase()
+        return "sftp connections only" in lower ||
+            "internal-sftp" in lower ||
+            "nologin" in lower ||
+            "this account is currently not available" in lower ||
+            "shell access is not enabled" in lower
+    }
+
+    private suspend fun pasteFromClipboardViaQueue(
+        cb: FileClipboard,
+        destType: BackendType,
+        destProfileId: String,
+        destRemote: String?,
+        destPath: String,
+    ) {
+        try {
+            _loading.value = true
+            pasteInProgress.set(true)
+            pasteFileCount.set(0)
+            pasteTotalFiles.set(0)
+            batchResolution = null
+            acquirePasteWakeLock()
+            _transferProgress.value = TransferProgress("Scanning selection…", 0, 0)
+
+            val leaves = withContext(Dispatchers.IO) {
+                enumerateLeaves(cb, destPath)
+            }
+
+            // Apply conflict resolution to top-level leaves (anything a
+            // user directly put on the clipboard). Deeper descendants
+            // inherit the batch-resolution if set, otherwise default to
+            // OVERWRITE — matching the old crossCopyDir behaviour.
+            val resolved = mutableListOf<PasteLeaf>()
+            val actions = mutableListOf<ConflictAction>()
+            val resumeBytes = mutableListOf<Long>()
+            var skipped = 0
+            for (leaf in leaves) {
+                if (!leaf.isTopLevel) {
+                    resolved.add(leaf)
+                    actions.add(batchResolution ?: ConflictAction.OVERWRITE)
+                    resumeBytes.add(0L)
+                    continue
+                }
+                val virtualEntry = SftpEntry(leaf.sourceName, leaf.sourcePath, false, leaf.size, 0, "")
+                val check = resolveConflictIfExists(virtualEntry, destType, destProfileId, destRemote, leaf.destPath)
+                if (check == null) {
+                    resolved.add(leaf)
+                    actions.add(ConflictAction.OVERWRITE)
+                    resumeBytes.add(0L)
+                    continue
+                }
+                val (action, destSize) = check
+                when (action) {
+                    ConflictAction.SKIP -> skipped++
+                    ConflictAction.RENAME -> {
+                        val newPath = withContext(Dispatchers.IO) {
+                            findUniqueName(destType, destProfileId, destRemote, leaf.destPath)
+                        }
+                        resolved.add(leaf.copy(destPath = newPath))
+                        actions.add(ConflictAction.RENAME)
+                        resumeBytes.add(0L)
+                    }
+                    ConflictAction.RESUME -> {
+                        resolved.add(leaf)
+                        actions.add(ConflictAction.RESUME)
+                        resumeBytes.add(destSize)
+                    }
+                    ConflictAction.OVERWRITE -> {
                         resolved.add(leaf)
                         actions.add(ConflictAction.OVERWRITE)
                         resumeBytes.add(0L)
-                        continue
-                    }
-                    val (action, destSize) = check
-                    when (action) {
-                        ConflictAction.SKIP -> skipped++
-                        ConflictAction.RENAME -> {
-                            val newPath = withContext(Dispatchers.IO) {
-                                findUniqueName(destType, destProfileId, destRemote, leaf.destPath)
-                            }
-                            resolved.add(leaf.copy(destPath = newPath))
-                            actions.add(ConflictAction.RENAME)
-                            resumeBytes.add(0L)
-                        }
-                        ConflictAction.RESUME -> {
-                            resolved.add(leaf)
-                            actions.add(ConflictAction.RESUME)
-                            resumeBytes.add(destSize)
-                        }
-                        ConflictAction.OVERWRITE -> {
-                            resolved.add(leaf)
-                            actions.add(ConflictAction.OVERWRITE)
-                            resumeBytes.add(0L)
-                        }
                     }
                 }
-
-                val rows = resolved.mapIndexed { i, leaf ->
-                    sh.haven.core.data.db.entities.PasteQueueEntry(
-                        indexInBatch = i,
-                        sourceBackendType = cb.sourceBackendType.name,
-                        sourceProfileId = cb.sourceProfileId,
-                        sourceRemoteName = cb.sourceRemoteName,
-                        sourcePath = leaf.sourcePath,
-                        sourceName = leaf.sourceName,
-                        sourceSize = leaf.size,
-                        destBackendType = destType.name,
-                        destProfileId = destProfileId,
-                        destRemote = destRemote,
-                        destPath = leaf.destPath,
-                        isCut = cb.isCut,
-                        conflictAction = actions[i].name,
-                        bytesTransferred = resumeBytes[i],
-                    )
-                }
-
-                withContext(Dispatchers.IO) {
-                    pasteQueueDao.clear()
-                    pasteQueueDao.insertAll(rows)
-                }
-                _clipboard.value = null
-
-                pasteTotalFiles.set(rows.size)
-                executePasteQueue()
-
-                val copied = pasteFileCount.get()
-                val stillPending = withContext(Dispatchers.IO) {
-                    pasteQueueDao.countByStatus(sh.haven.core.data.db.entities.PasteQueueEntry.STATUS_PENDING)
-                }
-                val verb = if (cb.isCut) "Moved" else "Copied"
-                _message.value = when {
-                    stillPending > 0 -> "$verb $copied — $stillPending still pending (Resume to retry)"
-                    skipped > 0 -> "$verb $copied files — skipped $skipped"
-                    else -> "$verb $copied files"
-                }
-                if (stillPending == 0) {
-                    withContext(Dispatchers.IO) { pasteQueueDao.clear() }
-                }
-                refresh()
-            } catch (e: Exception) {
-                Log.e(TAG, "Paste failed", e)
-                _error.value = "Paste failed: ${e.message}"
-            } finally {
-                pasteInProgress.set(false)
-                _loading.value = false
-                _transferProgress.value = null
-                _conflictPrompt.value = null
-                batchResolution = null
-                releasePasteWakeLock()
             }
+
+            val rows = resolved.mapIndexed { i, leaf ->
+                sh.haven.core.data.db.entities.PasteQueueEntry(
+                    indexInBatch = i,
+                    sourceBackendType = cb.sourceBackendType.name,
+                    sourceProfileId = cb.sourceProfileId,
+                    sourceRemoteName = cb.sourceRemoteName,
+                    sourcePath = leaf.sourcePath,
+                    sourceName = leaf.sourceName,
+                    sourceSize = leaf.size,
+                    destBackendType = destType.name,
+                    destProfileId = destProfileId,
+                    destRemote = destRemote,
+                    destPath = leaf.destPath,
+                    isCut = cb.isCut,
+                    conflictAction = actions[i].name,
+                    bytesTransferred = resumeBytes[i],
+                )
+            }
+
+            withContext(Dispatchers.IO) {
+                pasteQueueDao.clear()
+                pasteQueueDao.insertAll(rows)
+            }
+            _clipboard.value = null
+
+            pasteTotalFiles.set(rows.size)
+            executePasteQueue()
+
+            val copied = pasteFileCount.get()
+            val stillPending = withContext(Dispatchers.IO) {
+                pasteQueueDao.countByStatus(sh.haven.core.data.db.entities.PasteQueueEntry.STATUS_PENDING)
+            }
+            val verb = if (cb.isCut) "Moved" else "Copied"
+            _message.value = when {
+                stillPending > 0 -> "$verb $copied — $stillPending still pending (Resume to retry)"
+                skipped > 0 -> "$verb $copied files — skipped $skipped"
+                else -> "$verb $copied files"
+            }
+            if (stillPending == 0) {
+                withContext(Dispatchers.IO) { pasteQueueDao.clear() }
+            }
+            refresh()
+        } catch (e: Exception) {
+            Log.e(TAG, "Paste failed", e)
+            _error.value = "Paste failed: ${e.message}"
+        } finally {
+            pasteInProgress.set(false)
+            _loading.value = false
+            _transferProgress.value = null
+            _conflictPrompt.value = null
+            batchResolution = null
+            releasePasteWakeLock()
         }
     }
 
@@ -4477,6 +4975,21 @@ class SftpViewModel @Inject constructor(
                         }
                     }
                 }
+                BackendType.ROOT -> {
+                    val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                    srcFile.inputStream().use { input ->
+                        root.writeStream(
+                            path = destPath,
+                            input = input,
+                            append = resumeFromByte > 0,
+                            startOffset = resumeFromByte,
+                        ) { written ->
+                            val effective = resumeFromByte + written
+                            _transferProgress.value = TransferProgress(label, total, effective)
+                            maybePersistQueueProgress(effective)
+                        }
+                    }
+                }
             }
             return
         }
@@ -4527,6 +5040,22 @@ class SftpViewModel @Inject constructor(
                     val saf = safBackendFor(cb.sourceProfileId)
                         ?: throw IllegalStateException("SAF folder unavailable")
                     saf.openInputStream(entry.path, 0).use { input ->
+                        tempFile.outputStream().use { out ->
+                            val buf = ByteArray(64 * 1024)
+                            var transferred = 0L
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                transferred += n
+                                _transferProgress.value = TransferProgress("\u2B07 $baseLabel", knownSize * 2, transferred)
+                            }
+                        }
+                    }
+                }
+                BackendType.ROOT -> {
+                    val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                    root.openInputStream(entry.path, 0).use { input ->
                         tempFile.outputStream().use { out ->
                             val buf = ByteArray(64 * 1024)
                             var transferred = 0L
@@ -4592,6 +5121,20 @@ class SftpViewModel @Inject constructor(
                         saf.writeStream(destPath, input) { transferred ->
                             _transferProgress.value = TransferProgress("\u2B06 $baseLabel", downloaded * 2, downloaded + transferred)
                             maybePersistQueueProgress(transferred)
+                        }
+                    }
+                }
+                BackendType.ROOT -> {
+                    val root = rootBackendOrNull() ?: throw IllegalStateException("Root access is disabled")
+                    tempFile.inputStream().use { input ->
+                        root.writeStream(
+                            path = destPath,
+                            input = input,
+                            append = resumeFromByte > 0,
+                            startOffset = resumeFromByte,
+                        ) { written ->
+                            _transferProgress.value = TransferProgress("\u2B06 $baseLabel", downloaded * 2, downloaded + written)
+                            maybePersistQueueProgress(written)
                         }
                     }
                 }
@@ -4810,6 +5353,9 @@ class SftpViewModel @Inject constructor(
             BackendType.SAF -> kotlinx.coroutines.runBlocking {
                 safBackendFor(cb.sourceProfileId)?.delete(entry.path, entry.isDirectory)
             }
+            BackendType.ROOT -> kotlinx.coroutines.runBlocking {
+                rootBackendOrNull()?.delete(entry.path, entry.isDirectory)
+            }
         }
     }
 
@@ -4890,8 +5436,7 @@ class SftpViewModel @Inject constructor(
                 _currentPath.value = landing
                 val transport = currentSshTransport() ?: throw IllegalStateException("Session not connected")
                 val results = transport.list(landing)
-                _allEntries.value = sortEntries(results, _sortMode.value)
-                applyFilter()
+                applyListedEntries(landing, results)
             } catch (e: SshIoException) {
                 Log.w(TAG, "SFTP open failed; resetting channel and retrying", e)
                 resetSftpChannel()
@@ -4900,8 +5445,7 @@ class SftpViewModel @Inject constructor(
                         ?: throw IllegalStateException("Session not connected after reset")
                     val landing = _currentPath.value
                     val results = transport.list(landing)
-                    _allEntries.value = sortEntries(results, _sortMode.value)
-                    applyFilter()
+                    applyListedEntries(landing, results)
                 } catch (e2: Exception) {
                     Log.e(TAG, "SFTP open failed after retry", e2)
                     _error.value = "SFTP connection lost — please try again"
@@ -4950,6 +5494,11 @@ class SftpViewModel @Inject constructor(
     private suspend fun currentFileBackend(): sh.haven.feature.sftp.transport.FileBackend? {
         backendOverride?.invoke()?.let { return it }
         val profileId = _activeProfileId.value ?: return null
+        if (profileId == ROOT_PROFILE_ID) {
+            val root = rootBackendOrNull() ?: return null
+            _activeTransportLabel.value = root.label
+            return root
+        }
         val resolution = withContext(Dispatchers.IO) {
             transportSelector.resolveFileBackend(profileId)
         } ?: return null
@@ -4972,6 +5521,136 @@ class SftpViewModel @Inject constructor(
     /** Latest in-flight listing job; cancelled when a new navigation arrives. */
     private var listJob: Job? = null
 
+    /** Cached `(childCount, visibleChildCount)` keyed by `"$profileId:$dirPath"` (#800). */
+    private val folderCountCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
+
+    /** Background job populating remote directory child counts for the active directory (#800). */
+    private var folderCountJob: Job? = null
+
+    private fun isVirtualKernelDir(path: String): Boolean =
+        path == "/proc" || path.startsWith("/proc/") ||
+            path == "/sys" || path.startsWith("/sys/") ||
+            path == "/dev" || path.startsWith("/dev/")
+
+    private fun applyListedEntries(path: String, results: List<SftpEntry>) {
+        val profileId = _activeProfileId.value
+        if (profileId != null) {
+            folderCountCache["$profileId:$path"] = results.size to results.count { !it.name.startsWith(".") }
+        }
+        val enriched = if (profileId != null) {
+            results.map { entry ->
+                if (!entry.isDirectory || entry.childCount != null) {
+                    entry
+                } else {
+                    val cached = folderCountCache["$profileId:${entry.path}"]
+                    if (cached != null) {
+                        entry.copy(childCount = cached.first, visibleChildCount = cached.second)
+                    } else {
+                        entry
+                    }
+                }
+            }
+        } else {
+            results
+        }
+        _allEntries.value = sortEntries(enriched, _sortMode.value)
+        applyFilter()
+        if (profileId != null) {
+            populateFolderChildCounts(profileId, path, enriched)
+        }
+    }
+
+    private fun populateFolderChildCounts(
+        profileId: String,
+        parentPath: String,
+        entries: List<SftpEntry>,
+    ) {
+        folderCountJob?.cancel()
+        val dirsToProbe = entries
+            .filter { it.isDirectory && it.childCount == null && !isVirtualKernelDir(it.path) }
+            .take(64)
+        if (dirsToProbe.isEmpty()) {
+            folderCountJob = null
+            return
+        }
+        folderCountJob = viewModelScope.launch(Dispatchers.IO) {
+            val isSshProfile = !_isLocalProfile.value &&
+                !_isRootProfile.value &&
+                !_isSafProfile.value &&
+                !_isSmbProfile.value &&
+                !_isRcloneProfile.value &&
+                !_isReticulumProfile.value
+            if (isSshProfile) {
+                val ssh = getSshConnectionForProfile(profileId)
+                if (ssh != null) {
+                    val script = buildString {
+                        dirsToProbe.forEachIndexed { idx, dir ->
+                            val q = sh.haven.core.security.posixShellQuote(dir.path)
+                            append("if [ -r $q ] && [ -x $q ]; then ")
+                            append("printf '$idx %d %d\\n' \"$(ls -1A -- $q 2>/dev/null | wc -l)\" \"$(ls -1 -- $q 2>/dev/null | wc -l)\"; ")
+                            append("fi; ")
+                        }
+                    }
+                    val res = runCatching { ssh.execCommand(script) }.getOrNull()
+                    if (res != null && res.exitStatus == 0) {
+                        val updatedByPath = mutableMapOf<String, Pair<Int, Int>>()
+                        for (line in res.stdout.lineSequence()) {
+                            val parts = line.trim().split(Regex("\\s+"))
+                            if (parts.size == 3) {
+                                val idx = parts[0].toIntOrNull() ?: continue
+                                val total = parts[1].toIntOrNull() ?: continue
+                                val visible = parts[2].toIntOrNull() ?: continue
+                                val dir = dirsToProbe.getOrNull(idx) ?: continue
+                                val counts = total to visible
+                                folderCountCache["$profileId:${dir.path}"] = counts
+                                updatedByPath[dir.path] = counts
+                            }
+                        }
+                        if (updatedByPath.isNotEmpty() &&
+                            _activeProfileId.value == profileId &&
+                            _currentPath.value == parentPath
+                        ) {
+                            _allEntries.value = _allEntries.value.map { entry ->
+                                val counts = updatedByPath[entry.path]
+                                if (counts != null) {
+                                    entry.copy(childCount = counts.first, visibleChildCount = counts.second)
+                                } else {
+                                    entry
+                                }
+                            }
+                            applyFilter()
+                        }
+                        return@launch
+                    }
+                }
+            }
+
+            // Fallback for SFTP-only servers (`ForceCommand internal-sftp`), SMB, or rclone:
+            // list up to 20 subdirectories sequentially under listMutex.
+            for (dir in dirsToProbe.take(20)) {
+                if (_activeProfileId.value != profileId || _currentPath.value != parentPath) return@launch
+                val children = runCatching {
+                    listMutex.withLock {
+                        val backend = currentFileBackend() ?: return@withLock null
+                        backend.list(dir.path)
+                    }
+                }.getOrNull() ?: continue
+                val counts = children.size to children.count { !it.name.startsWith(".") }
+                folderCountCache["$profileId:${dir.path}"] = counts
+                if (_activeProfileId.value == profileId && _currentPath.value == parentPath) {
+                    _allEntries.value = _allEntries.value.map { entry ->
+                        if (entry.path == dir.path) {
+                            entry.copy(childCount = counts.first, visibleChildCount = counts.second)
+                        } else {
+                            entry
+                        }
+                    }
+                    applyFilter()
+                }
+            }
+        }
+    }
+
     private fun loadDirectoryEntries(path: String) {
         // Cancel anything queued on the mutex from a previous tap so
         // we don't accumulate stale work behind the in-flight call.
@@ -4982,8 +5661,7 @@ class SftpViewModel @Inject constructor(
                     if (!pasteInProgress.get()) _loading.value = true
                     val backend = currentFileBackend() ?: throw IllegalStateException("Not connected")
                     val results = backend.list(path)
-                    _allEntries.value = sortEntries(results, _sortMode.value)
-                    applyFilter()
+                    applyListedEntries(path, results)
                 } catch (e: CancellationException) {
                     throw e // propagate normal cancellation
                 } catch (e: IndexOutOfBoundsException) {
@@ -5006,8 +5684,7 @@ class SftpViewModel @Inject constructor(
                         val backend = currentFileBackend()
                             ?: throw IllegalStateException("Not connected after reset")
                         val results = backend.list(path)
-                        _allEntries.value = sortEntries(results, _sortMode.value)
-                        applyFilter()
+                        applyListedEntries(path, results)
                     } catch (e2: Exception) {
                         Log.e(TAG, "List directory failed after retry: path='$path'", e2)
                         _error.value = "SFTP connection lost — please try again"
@@ -5233,6 +5910,19 @@ class SftpViewModel @Inject constructor(
                             size = entry.size,
                             contentType = mime,
                             opener = smbOpener(entry.path),
+                            concurrentSafe = true,
+                        )
+                        data = android.net.Uri.parse("http://127.0.0.1:$port$urlPath")
+                    }
+                    _isRootProfile.value -> {
+                        // Root (/) via the loopback HTTP bridge so external viewer apps
+                        // can stream root-readable files without needing root themselves.
+                        val port = withContext(Dispatchers.IO) { sftpStreamServer.start() }
+                        val urlPath = sftpStreamServer.publish(
+                            path = entry.path,
+                            size = entry.size,
+                            contentType = mime,
+                            opener = rootOpener(entry.path),
                             concurrentSafe = true,
                         )
                         data = android.net.Uri.parse("http://127.0.0.1:$port$urlPath")
@@ -5601,6 +6291,7 @@ class SftpViewModel @Inject constructor(
     }
 
     companion object {
+        const val ROOT_PROFILE_ID = "root"
         private val MEDIA_MIME_PREFIXES = listOf("audio/", "video/")
 
         /**

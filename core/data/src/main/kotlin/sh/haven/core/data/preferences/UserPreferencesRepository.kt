@@ -93,6 +93,7 @@ class UserPreferencesRepository @Inject constructor(
     private val hideNavBarInTerminalKey = booleanPreferencesKey("hide_nav_bar_in_terminal")
     private val connectionLoggingEnabledKey = booleanPreferencesKey("connection_logging_enabled")
     private val excludeFromRecentsKey = booleanPreferencesKey("exclude_from_recents")
+    private val rootFilesEnabledKey = booleanPreferencesKey("root_files_enabled")
     private val backupSyncProfileIdKey = stringPreferencesKey("backup_sync_profile_id")
     private val backupSyncPathKey = stringPreferencesKey("backup_sync_path")
     private val backupAutoSyncEnabledKey = booleanPreferencesKey("backup_auto_sync_enabled")
@@ -385,6 +386,23 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setExcludeFromRecents(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[excludeFromRecentsKey] = enabled
+        }
+    }
+
+    /**
+     * Opt-in `Root (/)` tab in the Files browser (#799). Off by default so Haven
+     * never probes or requests `su` unless the user turns this on AND selects the
+     * `Root (/)` tab. Deliberately omitted from MCP `get_preference` /
+     * `set_preference` and `TransportSelector` so agent tools cannot enable or
+     * read UID-0 filesystem access.
+     */
+    val rootFilesEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[rootFilesEnabledKey] ?: false
+    }
+
+    suspend fun setRootFilesEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[rootFilesEnabledKey] = enabled
         }
     }
 
@@ -2504,7 +2522,8 @@ class UserPreferencesRepository @Inject constructor(
         SCREEN("screen", "https://www.gnu.org/software/screen/", { name -> "screen -dRR $name" }, supportsScrollback = false),
         BYOBU("byobu", "https://www.byobu.org", { name -> "byobu new-session -A -s $name \\; set -gq mouse on" }),
         HERDR("herdr", "https://herdr.dev", { name -> "herdr --session $name" }),
-        PSMUX("psmux", "https://github.com/psmux/psmux", { name -> "psmux new-session -A -s $name" });
+        PSMUX("psmux", "https://github.com/psmux/psmux", { name -> "psmux new-session -A -s $name" }),
+        RMUX("rmux", "https://github.com/Helvesec/rmux", { name -> "rmux new-session -A -s $name \\; set -gq allow-passthrough on \\; set -gq mouse on" });
 
         companion object {
             fun fromString(value: String?): SessionManager =

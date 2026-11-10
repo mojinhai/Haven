@@ -587,14 +587,21 @@ data class ConnectionProfile(
      */
     val openaiBaseUrl: String
         get() {
-            val base = if (host.contains("://")) host.trimEnd('/')
-            else "http://$host:${if (port > 0) port else 80}".trimEnd('/')
-            val prefix = openaiPathPrefix.orEmpty()
-            return if (prefix.isEmpty()) base else base + (if (prefix.startsWith("/")) prefix else "/$prefix")
+            val trimmedHost = host.trim().trimEnd('/')
+            val base = when {
+                trimmedHost.contains("://") -> trimmedHost
+                port == 443 -> "https://$trimmedHost"
+                else -> "http://$trimmedHost:${if (port > 0) port else 80}".trimEnd('/')
+            }
+            val prefix = openaiPathPrefix?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }
+            return if (prefix == null || base.endsWith("/$prefix") || base.endsWith("/$prefix/v1")) base else "$base/$prefix"
         }
 
     /** SAF-backed "local folder" file location (#415) — browses a persisted [safTreeUri] tree. */
     val isSaf: Boolean get() = connectionType == "SAF"
+
+    /** Opt-in UID-0 local filesystem tab (#799) — synthetic in-memory profile, never persisted in Room. */
+    val isRoot: Boolean get() = connectionType == "ROOT"
 
     // Bluetooth-serial (SPP/RFCOMM) console (#406). The paired device's MAC is
     // stored in [host] — no new column, so no Room schema bump. A byte-stream
@@ -628,5 +635,5 @@ data class ConnectionProfile(
     val usbSerialConfig: String? get() = sshOptions
 
     val isDesktop: Boolean get() = isVnc || isRdp || isSpice || isGlkvm
-    val isTerminal: Boolean get() = !isDesktop && !isSmb && !isRclone && !isEmail && !isSaf && !isOpenai
+    val isTerminal: Boolean get() = !isDesktop && !isSmb && !isRclone && !isEmail && !isSaf && !isRoot && !isOpenai
 }

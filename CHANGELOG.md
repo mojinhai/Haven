@@ -5,6 +5,40 @@ the corresponding GitHub Release; a release can't ship without its section
 (enforced by `scripts/check-changelog.sh` in CI). The GitHub "Full Changelog"
 compare link is appended automatically — don't add it here.
 
+## v5.94.23
+
+- Add an opt-in **Root (/)** tab in **Files** (**Settings -> Advanced**), lazily starting an `app_process` worker via `su -mm` only when opened while keeping MCP tools and `DocumentsProvider` isolated (#799, thanks @zol-c).
+- Isolate concurrent Firefox/LibreWolf app-window profiles (`-no-remote`), clear stale Mozilla profile locks before launch, and send `SIGTERM` before `SIGKILL` on stop (#812, thanks @NAZY-OS).
+
+## v5.94.22
+
+- Add `rmux` as a global and per-connection session manager option across SSH, Mosh, Eternal Terminal, and local PRoot shells, with `~/.local/bin` and `~/.cargo/bin` on `PATH` (#810, thanks @NAZY-OS).
+- Refresh `archlinux-keyring` and update `glibc` and `gcc-libs` (`--needed`) in `Pacman.updateCmd()` and Arch upgrade hooks to avoid `libgcc`/`libstdc++` file conflicts and stale PGP keys on Arch rootfses (#808, #809, thanks @NAZY-OS).
+
+## v5.94.21
+
+- Add a searchable AI model picker with custom model entry and quick routing suffix chips (`:free`, `:online`, `:nitro`, `:floor`, `:extended`, `:batch`), inline composer slash commands (`/new`, `/clear`, `/model`, `/save`, `/history`), a saved-conversation history sheet, and encrypted backup/restore support for saved AI chats (#807, thanks @n1x0l4s).
+
+## v5.94.20
+
+- Support full `https://` endpoint URLs that include `/v1` (such as `https://openrouter.ai/api/v1`) and deduplicate pre-applied path prefixes in AI endpoint connections, use `https://` for bare hosts on port 443, and omit `:0` from the connection list and edit dialog when no port is set (#806, thanks @n1x0l4s).
+- Preserve scrollback lines in `smartCopy` when a terminal selection spans negative scrollback row indices while the viewport is at the bottom (#805, thanks @del26).
+
+## v5.94.19
+
+- Add Apple Remote Desktop authentication (RFB security type 30) for macOS Screen Sharing when a VNC profile has a username (#801, thanks @boyce-ywr).
+- Add a compose-then-send text bar to the VNC viewer toolbar and fullscreen overlay (#804, thanks @boyce-ywr).
+- Add **Copy as one line** to the terminal selection toolbar (#803, thanks @boyce-ywr).
+- Rebind the IME over a fresh `InputConnection` when returning to the terminal or raising the keyboard (#802, thanks @boyce-ywr).
+
+## v5.94.18
+
+- Show direct item counts (`1 item` / `N items`, respecting the `Show hidden files` toggle) on folder rows in the Files tab instead of the redundant `Directory` subtitle, loading local counts during listing and remote SFTP counts in a single batched SSH command (#800, thanks @zol-c).
+
+## v5.94.17
+
+- Run same-session SFTP file and folder moves (`rename` with `mv -f` fallback across mountpoints) and copies (`cp -Rfp` over SSH `exec`, falling back to stream transfer on SFTP-only hosts) directly on the remote server instead of downloading to local cache and re-uploading (#798, thanks @zol-c).
+
 ## v5.94.16
 
 - Support selecting multiple files in **Attach → Send a file** (`OpenMultipleDocuments`), uploading the batch into one chosen SFTP/rclone destination folder and pasting their space-separated shell-quoted paths at the terminal cursor (#797, thanks @boyce-ywr).
