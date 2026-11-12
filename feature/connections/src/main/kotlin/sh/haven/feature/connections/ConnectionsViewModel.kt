@@ -57,7 +57,7 @@ import sh.haven.core.ssh.sshEngineFromOptionsText
 import sh.haven.core.ssh.SshConnectionService
 import sh.haven.core.ssh.SshKeyExporter
 import sh.haven.core.ssh.SessionManager
-import sh.haven.core.ssh.SessionManagerRegistry
+import sh.haven.core.session.SessionManagerRegistry
 import sh.haven.core.ssh.SshSessionManager
 import sh.haven.core.ssh.SshVerboseLogger
 import sh.haven.core.data.db.entities.KnownHost
@@ -2191,8 +2191,9 @@ class ConnectionsViewModel @Inject constructor(
 
     private fun canAutoConnect(profile: ConnectionProfile, keys: List<SshKey>): Boolean = when {
         profile.isLocal -> true
+        profile.isGuest -> true
         profile.isReticulum -> true
-        profile.isRclone -> true
+        profile.isRclone -> !profile.rcloneRemoteName.isNullOrBlank()
         // Connect only on explicit tap: a BT link is slow/blocking and needs the
         // adapter powered + the device in range (#406).
         profile.isBtSerial -> false
@@ -2208,7 +2209,11 @@ class ConnectionsViewModel @Inject constructor(
         profile.isGlkvm -> false
         profile.isSmb -> false
         profile.isSaf -> false
-        else -> !profile.sshPassword.isNullOrBlank() || keys.isNotEmpty()
+        profile.isEmail -> false
+        profile.isOpenai -> false
+        profile.isEternalTerminal || profile.isMosh || profile.isSsh ->
+            !profile.sshPassword.isNullOrBlank() || (!profile.ignoreSavedKeys && keys.isNotEmpty()) || profile.keyId != null
+        else -> false
     }
 
     /**
@@ -2672,7 +2677,7 @@ class ConnectionsViewModel @Inject constructor(
             return
         }
         if (profile.isRdp) {
-            connectRdp(profile, password)
+            connectRdp(profile, password, rememberPassword)
             return
         }
         if (profile.isSpice) {
@@ -2680,11 +2685,12 @@ class ConnectionsViewModel @Inject constructor(
             return
         }
         if (profile.isGlkvm) {
-            connectGlkvm(profile, profile.username, profile.glkvmPassword)
+            val effectiveUser = usernameOverride?.takeIf { it.isNotBlank() } ?: profile.username
+            connectGlkvm(profile, effectiveUser, password, rememberPassword)
             return
         }
         if (profile.isSmb) {
-            connectSmb(profile, password)
+            connectSmb(profile, password, rememberPassword)
             return
         }
         if (profile.isRclone) {
@@ -2788,19 +2794,28 @@ class ConnectionsViewModel @Inject constructor(
         }
     }
 
-    private fun connectRdp(profile: ConnectionProfile, password: String) {
+    private fun connectRdp(
+        profile: ConnectionProfile,
+        password: String,
+        rememberPassword: Boolean? = null,
+    ) {
         val host = profile.host
         val port = profile.rdpPort
         val username = profile.rdpUsername ?: profile.username
         val rdpPassword = password.ifBlank { profile.rdpPassword ?: "" }
         val domain = profile.rdpDomain ?: ""
         viewModelScope.launch {
+            if (rememberPassword == true && !profile.ephemeral && rdpPassword.isNotBlank()) {
+                repository.save(profile.copy(rdpPassword = rdpPassword))
+            }
             repository.markConnected(profile.id)
             val sshProfileId = profile.rdpSshProfileId
             if (profile.rdpSshForward && sshProfileId != null) {
                 val needsPrompt = jumpHostNeedsPasswordPrompt(sshProfileId)
                 if (needsPrompt != null) {
                     _pendingTunnelDependent.value = profile
+                    _pendingDependentPassword.value = rdpPassword
+                    _pendingDependentRememberPassword.value = rememberPassword
                     _passwordFallback.value = needsPrompt
                     return@launch
                 }
@@ -2823,7 +2838,13 @@ class ConnectionsViewModel @Inject constructor(
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to connect SSH tunnel host for RDP", e)
-                    handleTunnelJumpFailure(e, profile, sshProfileId)
+                    handleTunnelJumpFailure(
+                        e,
+                        profile,
+                        sshProfileId,
+                        dependentPassword = rdpPassword,
+                        dependentRememberPassword = rememberPassword,
+                    )
                 } finally {
                     _connectingProfileId.value = null
                 }
@@ -2874,16 +2895,44 @@ class ConnectionsViewModel @Inject constructor(
         }
     }
 
-    private fun connectGlkvm(profile: ConnectionProfile, user: String?, password: String?) {
+    private fun connectGlkvm(
+        profile: ConnectionProfile,
+        user: String?,
+        password: String?,
+        rememberPassword: Boolean? = null,
+    ) {
+        val effectiveUser = user?.ifBlank { "admin" } ?: "admin"
+        val effectivePassword = password?.takeIf { it.isNotBlank() }
+            ?: profile.glkvmPassword?.takeIf { it.isNotBlank() }
+        // kvmd rejects an empty `passwd` field with HTTP 400 ValidatorError
+        // ("The argument is not a valid passwd characters"). Prompt for the web
+        // UI password when none is stored yet (unless already connected, where
+        // re-tapping only switches focus to the open Desktop tab).
+        if (effectivePassword == null &&
+            desktopSessionRegistry.statuses.value[profile.id] != sh.haven.core.data.desktop.DesktopStatus.CONNECTED
+        ) {
+            _passwordFallback.value = profile
+            return
+        }
         val host = profile.host
         val port = profile.glkvmPort ?: 443
         viewModelScope.launch {
+            if (rememberPassword == true && !profile.ephemeral && effectivePassword != null) {
+                repository.save(
+                    profile.copy(
+                        username = effectiveUser,
+                        glkvmPassword = effectivePassword,
+                    ),
+                )
+            }
             repository.markConnected(profile.id)
             val sshProfileId = profile.glkvmSshProfileId
             if (profile.glkvmSshForward && sshProfileId != null) {
                 val needsPrompt = jumpHostNeedsPasswordPrompt(sshProfileId)
                 if (needsPrompt != null) {
                     _pendingTunnelDependent.value = profile
+                    _pendingDependentPassword.value = effectivePassword
+                    _pendingDependentRememberPassword.value = rememberPassword
                     _passwordFallback.value = needsPrompt
                     return@launch
                 }
@@ -2893,7 +2942,7 @@ class ConnectionsViewModel @Inject constructor(
                         sshProfileId, "", tunnelOwnerProfileId = profile.id,
                     )
                     _navigateToGlkvm.value = GlkvmNavigation(
-                        host, port, user, password,
+                        host, port, effectiveUser, effectivePassword,
                         targetLayout = profile.glkvmTargetLayout,
                         sshForward = true,
                         sshSessionId = sshSessionId,
@@ -2901,13 +2950,19 @@ class ConnectionsViewModel @Inject constructor(
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to connect SSH tunnel host for GLKVM", e)
-                    handleTunnelJumpFailure(e, profile, sshProfileId)
+                    handleTunnelJumpFailure(
+                        e,
+                        profile,
+                        sshProfileId,
+                        dependentPassword = effectivePassword ?: "",
+                        dependentRememberPassword = rememberPassword,
+                    )
                 } finally {
                     _connectingProfileId.value = null
                 }
             } else {
                 _navigateToGlkvm.value = GlkvmNavigation(
-                    host, port, user, password,
+                    host, port, effectiveUser, effectivePassword,
                     targetLayout = profile.glkvmTargetLayout,
                     sshForward = profile.glkvmSshForward,
                     profileId = profile.id,
@@ -2916,7 +2971,11 @@ class ConnectionsViewModel @Inject constructor(
         }
     }
 
-    private fun connectSmb(profile: ConnectionProfile, password: String) {
+    private fun connectSmb(
+        profile: ConnectionProfile,
+        password: String,
+        rememberPassword: Boolean? = null,
+    ) {
         val host = profile.host
         val port = profile.smbPort
         val shareName = profile.smbShare ?: return
@@ -2924,6 +2983,9 @@ class ConnectionsViewModel @Inject constructor(
         val smbPassword = password.ifBlank { profile.smbPassword ?: "" }
         val domain = profile.smbDomain ?: ""
         viewModelScope.launch {
+            if (rememberPassword == true && !profile.ephemeral && smbPassword.isNotBlank()) {
+                repository.save(profile.copy(smbPassword = smbPassword))
+            }
             repository.markConnected(profile.id)
             // Hoisted out of try so the catch block can see them when
             // cleaning up after a connect failure (#121).
@@ -6896,10 +6958,15 @@ class ConnectionsViewModel @Inject constructor(
     private suspend fun connectSilent(profile: ConnectionProfile) {
         when {
             profile.isLocal -> connectLocalSilent(profile)
+            profile.isGuest -> connectGuestSilent(profile)
+            profile.isRclone -> connectRcloneSilent(profile)
             profile.isReticulum -> connectReticulumSilent(profile)
             profile.isEternalTerminal -> connectEtSilent(profile)
             profile.isMosh -> connectMoshSilent(profile)
-            else -> connectSshSilent(profile)
+            profile.isSsh -> connectSshSilent(profile)
+            else -> throw UnsupportedOperationException(
+                "Silent group launch is not supported for connection type ${profile.connectionType}",
+            )
         }
     }
 
@@ -6910,11 +6977,23 @@ class ConnectionsViewModel @Inject constructor(
         }
 
         val prootManager = localSessionManager.prootManager
-        if (prootManager.prootBinary != null && !prootManager.isRootfsInstalled) {
-            prootManager.installRootfs()
+        if (!profile.useAndroidShell) {
+            profile.prootDistroId?.takeIf { it.isNotBlank() }?.let { distroId ->
+                if (prootManager.activeDistroId != distroId) {
+                    prootManager.setActiveDistroId(distroId)
+                }
+            }
+            if (prootManager.prootBinary != null && !prootManager.isRootfsInstalled) {
+                prootManager.installRootfs()
+            }
         }
 
-        val sessionId = localSessionManager.registerSession(profile.id, profile.label)
+        val sessionId = localSessionManager.registerSession(
+            profile.id,
+            profile.label,
+            profile.useAndroidShell,
+            profile.prootDistroId,
+        )
         try {
             localSessionManager.connectSession(sessionId)
             repository.markConnected(profile.id)
@@ -6927,6 +7006,42 @@ class ConnectionsViewModel @Inject constructor(
             localSessionManager.removeSession(sessionId)
             throw e
         }
+    }
+
+    private suspend fun connectGuestSilent(profile: ConnectionProfile) {
+        val existing = umlGuestManager.getSessionsForProfile(profile.id)
+        if (existing.any { it.status == sh.haven.core.local.uml.UmlGuestManager.SessionState.Status.CONNECTED }) {
+            return
+        }
+        if (!umlGuestManager.isAvailable()) {
+            throw IllegalStateException("This build does not include the Linux guest payload")
+        }
+        umlGuestManager.ensureRootfs()
+        val sessionId = umlGuestManager.registerSession(profile.id, profile.label)
+        try {
+            umlGuestManager.connectSession(sessionId)
+            repository.markConnected(profile.id)
+            connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.CONNECTED)
+            startForegroundServiceIfNeeded()
+        } catch (e: Exception) {
+            connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.FAILED, details = e.message)
+            umlGuestManager.updateStatus(sessionId, sh.haven.core.local.uml.UmlGuestManager.SessionState.Status.ERROR)
+            umlGuestManager.removeSession(sessionId)
+            throw e
+        }
+    }
+
+    private suspend fun connectRcloneSilent(profile: ConnectionProfile) {
+        val remoteName = profile.rcloneRemoteName
+            ?: throw IllegalStateException("No rclone remote configured for ${profile.label}")
+        val provider = profile.rcloneProvider ?: ""
+        val socksAddr = tunnelResolver.socksEndpoint(profile)
+        rcloneClient.setProxy(socksAddr?.let { "socks5://${it.hostString}:${it.port}" })
+        val sessionId = rcloneSessionManager.registerSession(profile.id, profile.label)
+        withContext(Dispatchers.IO) {
+            rcloneSessionManager.connectSession(sessionId, remoteName, provider)
+        }
+        repository.markConnected(profile.id)
     }
 
     private suspend fun connectReticulumSilent(profile: ConnectionProfile) {

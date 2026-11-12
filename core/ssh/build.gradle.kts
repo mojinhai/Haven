@@ -43,6 +43,7 @@ if (providers.gradleProperty("excludeSshlibContractTests").orNull == "true") {
 }
 
 dependencies {
+    api(project(":core:session"))
     implementation(project(":core:redact"))
     api(libs.jsch)
     // Second SSH engine (#58). implementation, NOT api — no module outside
@@ -71,7 +72,7 @@ dependencies {
     testImplementation(libs.coroutines.test)
     // Real org.json for unit tests (android.jar's is stubbed under
     // unitTests.isReturnDefaultValues) — same recipe as core:mcp.
-    testImplementation("org.json:json:20260814")
+    testImplementation(libs.orgjson)
     // Embedded SSH server used to reproduce the v4.51.0 TOFU bypass bug (#75 follow-up)
     testImplementation(libs.sshd.core)
     testImplementation(libs.sshd.sftp)

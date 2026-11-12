@@ -3,6 +3,7 @@ package sh.haven.core.glkvm
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -87,6 +88,7 @@ class GlkvmClient private constructor(
 
         fun build(): GlkvmClient {
             val host = host.trim()
+            val cleanPassword = password.trim('\r', '\n')
             require(host.isNotEmpty() || baseUrlOverride != null) { "GLKVM host is required" }
             val base = baseUrlOverride ?: "https://$host:$port"
             val builder = OkHttpClient.Builder()
@@ -98,14 +100,57 @@ class GlkvmClient private constructor(
             if (tm != null && sslSocketFactory != null) {
                 builder.sslSocketFactory(sslSocketFactory!!, tm)
                 // The device cert rarely carries a matching hostname, and the
-                // SSH-forward path dials 127.0.0.1; pin-by-SHA256 is the trust
-                // model (same policy as the known_tls_certs TOFU store).
+                // SSH-forward / tunnel-relay path dials 127.0.0.1; pin-by-SHA256
+                // is the trust model (same policy as the known_tls_certs TOFU store).
                 builder.hostnameVerifier { _, _ -> true }
             }
             if (plainSocketFactory != null) {
                 builder.socketFactory(plainSocketFactory!!)
+                // Userspace tunnel sockets (TunneledSocket / DeferredTunneledSocket)
+                // ignore setSoTimeout, so OkHttp's RealConnection.isHealthy 1 ms
+                // SO_TIMEOUT probe on pooled connections idle >= 10 s would block
+                // indefinitely. Do not keep idle sockets in OkHttp's pool when a
+                // custom plainSocketFactory is injected directly.
+                builder.connectionPool(okhttp3.ConnectionPool(0, 1, TimeUnit.NANOSECONDS))
+                // Tunnel/proxy factories (WireGuard, Tailscale, SOCKS5) resolve
+                // internal hostnames remotely via InetSocketAddress.hostString;
+                // never consult system clearnet DNS (avoids leaking private .lan
+                // names, mobile DNS timeouts, and split-horizon wrong IPs).
+                builder.dns { hostname ->
+                    placeholderOrLiteralAddresses(hostname)
+                }
             }
-            return GlkvmClient(builder.build(), base.toHttpUrl(), user, password)
+            return GlkvmClient(builder.build(), base.toHttpUrl(), user, cleanPassword)
+        }
+
+        private fun placeholderOrLiteralAddresses(hostname: String): List<java.net.InetAddress> {
+            val trimmed = hostname.trim().removeSurrounding("[", "]")
+            if (trimmed.equals("localhost", ignoreCase = true)) {
+                return listOf(
+                    java.net.InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1)),
+                    java.net.InetAddress.getByAddress("localhost", ByteArray(16).apply { this[15] = 1 }),
+                )
+            }
+            val ipv4Parts = trimmed.split('.')
+            if (ipv4Parts.size == 4 && ipv4Parts.all { p -> p.isNotEmpty() && p.length <= 3 && p.all { it.isDigit() } }) {
+                val nums = ipv4Parts.map { it.toInt() }
+                if (nums.all { it in 0..255 }) {
+                    return listOf(
+                        java.net.InetAddress.getByAddress(
+                            trimmed,
+                            byteArrayOf(nums[0].toByte(), nums[1].toByte(), nums[2].toByte(), nums[3].toByte()),
+                        ),
+                    )
+                }
+            }
+            if (trimmed.contains(':')) {
+                return try {
+                    listOf(java.net.InetAddress.getByName(trimmed))
+                } catch (_: java.net.UnknownHostException) {
+                    listOf(java.net.InetAddress.getByAddress(hostname, ByteArray(4)))
+                }
+            }
+            return listOf(java.net.InetAddress.getByAddress(hostname, ByteArray(4)))
         }
     }
 
@@ -356,6 +401,59 @@ class GlkvmClient private constructor(
     }
 
     data class VideoState(val signal: Boolean, val resolution: String, val fps: Double? = null)
+
+    /** Current configured EDID preset on the KVM (e.g. `"E2560x1440"`, or `""` for device default). */
+    fun edidGet(): String {
+        val json = callJson("/api/upgrade/get_edid")
+        val r = json.optJSONObject("result") ?: json
+        return r.optString("edid", "")
+    }
+
+    /** Re-apply an EDID preset (`POST /api/upgrade/edid` multipart field `"edid"`). */
+    fun edidSet(value: String): JSONObject {
+        val tok = login(force = false)
+        val url = (baseUrl.resolve("api/upgrade/edid") ?: throw GlkvmException("bad base url"))
+            .newBuilder().addQueryParameter("auth_token", tok).build()
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("edid", value)
+            .build()
+        val req = Request.Builder().url(url).header("token", tok).post(multipart).build()
+        http.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if ((resp.code == 401) || (resp.code == 403 && text.contains("ForbiddenError"))) {
+                val tok2 = login(force = true)
+                val url2 = (baseUrl.resolve("api/upgrade/edid") ?: throw GlkvmException("bad base url"))
+                    .newBuilder().addQueryParameter("auth_token", tok2).build()
+                http.newCall(Request.Builder().url(url2).header("token", tok2).post(multipart).build())
+                    .execute().use { second ->
+                        val t2 = second.body?.string().orEmpty()
+                        if (!second.isSuccessful) throw GlkvmException("POST /api/upgrade/edid -> HTTP ${second.code}: ${t2.take(200)}")
+                        return runCatching { JSONObject(t2) }.getOrElse { JSONObject().put("ok", true) }
+                    }
+            }
+            if (!resp.isSuccessful) throw GlkvmException("POST /api/upgrade/edid -> HTTP ${resp.code}: ${text.take(200)}")
+            return runCatching { JSONObject(text) }.getOrElse { JSONObject().put("ok", true) }
+        }
+    }
+
+    /**
+     * Re-emit the current EDID preset (HPD pulse) to wake a target whose GPU dropped
+     * its HDMI output (typical after a KVM reboot while Windows still has Duplicate enabled).
+     * Polls up to [timeoutMs] for `videoState().signal` to become true.
+     */
+    fun edidProd(timeoutMs: Long = 15_000L, pollIntervalMs: Long = 2_000L): Boolean {
+        val cur = edidGet()
+        val value = cur.ifEmpty { "E2560x1440" }
+        edidSet(value)
+        var after = videoState()
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!after.signal && System.currentTimeMillis() < deadline) {
+            Thread.sleep(pollIntervalMs.coerceAtLeast(10L))
+            after = videoState()
+        }
+        return after.signal
+    }
 
     override fun close() {
         http.dispatcher.cancelAll()

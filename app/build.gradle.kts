@@ -13,8 +13,8 @@ android {
         applicationId = "sh.haven.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 951
-        versionName = "5.94.26"
+        versionCode = 955
+        versionName = "5.94.30"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -242,6 +242,7 @@ androidComponents {
 dependencies {
     implementation(project(":core:redact"))
     implementation(project(":core:ui"))
+    implementation(project(":core:session"))
     implementation(project(":core:ssh"))
     implementation(project(":core:security"))
     implementation(project(":core:data"))
@@ -258,7 +259,9 @@ dependencies {
     implementation(project(":core:usbserial"))
     implementation(project(":core:vnc"))
     implementation(project(":core:rdp"))
-    implementation(project(":core:prns"))
+    if (providers.gradleProperty("enablePrns").orNull == "true") {
+        implementation(project(":core:prns"))
+    }
     implementation(project(":core:spice"))
     implementation(project(":core:glkvm"))
     implementation(project(":core:smb"))
@@ -331,7 +334,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
-    testImplementation("org.json:json:20260814")
+    testImplementation(libs.orgjson)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test)
 }

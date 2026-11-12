@@ -5,6 +5,30 @@ the corresponding GitHub Release; a release can't ship without its section
 (enforced by `scripts/check-changelog.sh` in CI). The GitHub "Full Changelog"
 compare link is appended automatically — don't add it here.
 
+## v5.94.30
+
+- Show live download, archive extraction, and rootfs configuration progress during PRoot Linux setup and keep `SessionService` running in the foreground while PRoot setup, local desktops, and System VMs are active in the background (#831, #832, thanks @NAZY-OS).
+- Add per-distro PRoot network routing (`Auto`, `Direct`, `Specific tunnel`, and `Offline`) with custom `/etc/resolv.conf` DNS overrides and per-tunnel loopback SOCKS5 exposure via `HAVEN_SOCKS5_PROXY` (#835, thanks @NAZY-OS).
+- Bundle the 19 Markdown user guide pages into app assets and add a searchable offline **User guide** reader under `Settings -> About` (#833, thanks @NAZY-OS).
+
+## v5.94.29
+
+- Fix soft-keyboard number row (`0`–`9`), shifted capitals, and symbols in RDP, SPICE, GLKVM, and VNC sessions without leaving `Shift` stuck on the remote host or duplicating AOSP `commitText` key echoes (#606, thanks @thegoodpackage).
+- Add GLKVM HDMI EDID signal recovery and 2 px pillarbox crop hysteresis, return an explicit error when `send_desktop_clipboard` targets GLKVM or SPICE, raise `capture_desktop_tab` default `maxWidth` to 1920 with `scaleX`/`scaleY` metadata, and support `keys` chords in `type_desktop_text`.
+
+## v5.94.28
+
+- Register `UpdateNotifier`'s `ProcessLifecycleOwner` observer on the main thread so cold launch after `v5.94.27` no longer crashes during `HavenApp` background startup (#830, thanks @3in1sl).
+- Honour latched `Swipe` arrow mode (`swipeArrowsMode`), including horizontal swipes and `Shift`+swipe, when a terminal app enables mouse tracking (`htop`, `lnav`, `vim` with `mouse=a`, `tmux`) (#736, thanks @excurso).
+- Prompt for a GLKVM password (with **Remember password**) instead of sending an empty `passwd` that `kvmd` rejects with `HTTP 400 ValidatorError`, trim pasted `\r`/`\n` characters, mask GLKVM and SPICE password inputs, show `GLKVM`/`SPICE` status headers instead of `RDP`, and route GLKVM tunnel sessions over a local loopback TCP relay without idle-socket deadlocks or host DNS leaks.
+
+## v5.94.27
+
+- Trigger a remote right-click on stationary touch long-press in RDP, SPICE, and GLKVM **Direct** and **Touchpad** modes, matching VNC (#828, thanks @pixel4696).
+- Encrypt `spicePassword` at rest via a single 13-field `ConnectionProfile.CREDENTIAL_FIELDS` descriptor table, preserve runtime `ephemeral` flags across `.copy(...)`, and extend encrypted backups across workspaces, sync profiles, age identities, step-ca configs, pinned TLS certificates, mail rules, `Set<String>` preferences, and 11 previously omitted `ConnectionProfile` columns.
+- Route SPICE and GLKVM sessions fail-closed through configured tunnels, clean up remote-desktop sockets and tunnel leases on a non-cancelled scope in `DesktopViewModel.onCleared()`, honour `useAndroidShell` / `prootDistroId` and non-SSH protocols during group launch, register serial/desktop/VM sessions as foreground-service participants, and harden MCP loopback `Origin`/`Host` validation, `present_web` WebView settings, Tasker action HMAC tokens, and headless SSH key selection.
+- Defer startup graph construction in `HavenApp` via `dagger.Lazy`, move orphan Xvnc and PRoot rootfs startup scans off the main thread, extract `:core:session` and Hilt `@IntoSet ToolProvider` multibindings (`McpServer` constructor `64 -> 9` parameters), and share a single `RemoteDesktopViewport` in `:core:ui` across VNC, RDP, SPICE, and GLKVM.
+
 ## v5.94.26
 
 - Wire Sway and nested-Wayland launchers to the configured PRoot guest user, skip `fakeroot` on Mozilla browser app windows, seed `/etc/machine-id`, and disable Mozilla seccomp child sandboxes inside PRoot so Firefox starts under `qemu-user` emulation (#827, thanks @NAZY-OS).

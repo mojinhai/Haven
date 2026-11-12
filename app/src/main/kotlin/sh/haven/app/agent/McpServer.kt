@@ -176,94 +176,159 @@ private const val WG_RETRY_MS: Long = 5_000L
 @Singleton
 class McpServer @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val connectionRepository: ConnectionRepository,
-    private val portForwardRepository: PortForwardRepository,
-    private val sshSessionManager: SshSessionManager,
-    private val sessionManagerRegistry: SessionManagerRegistry,
-    private val reticulumSessionManager: sh.haven.core.reticulum.ReticulumSessionManager,
-    private val reticulumForwardServer: sh.haven.core.reticulum.ReticulumForwardServer,
-    private val rcloneClient: RcloneClient,
-    private val mailSessionManager: sh.haven.core.mail.MailSessionManager,
-    private val sftpStreamServer: SftpStreamServer,
-    private val hlsStreamServer: HlsStreamServer,
-    private val ffmpegExecutor: FfmpegExecutor,
     private val preferencesRepository: UserPreferencesRepository,
-    private val terminalFontInstaller: TerminalFontInstaller,
-    private val localSessionManager: LocalSessionManager,
     private val auditRecorder: AgentAuditRecorder,
     private val consentManager: AgentConsentManager,
-    private val agentUiCommandBus: sh.haven.core.data.agent.AgentUiCommandBus,
-    private val transportSelector: sh.haven.feature.sftp.transport.TransportSelector,
-    private val workspaceRepository: sh.haven.core.data.repository.WorkspaceRepository,
-    private val workspaceLauncher: sh.haven.app.workspace.WorkspaceLauncher,
     private val tunnelConfigRepository: sh.haven.core.data.repository.TunnelConfigRepository,
     private val tunnelManager: sh.haven.core.tunnel.TunnelManager,
-    private val terminalSessionRegistry: sh.haven.feature.terminal.agent.TerminalSessionRegistry,
-    private val portKnocker: sh.haven.core.knock.PortKnocker,
-    private val spaSender: sh.haven.core.spa.SpaSender,
-    private val connectionLogRepository: sh.haven.core.data.repository.ConnectionLogRepository,
-    private val servedFileTracker: sh.haven.core.data.agent.ServedFileTracker,
-    private val syncProfileRepository: sh.haven.core.data.repository.SyncProfileRepository,
-    private val mailRuleRepository: sh.haven.core.data.repository.MailRuleRepository,
-    private val mailWatchManager: sh.haven.app.agent.mailrules.MailWatchManager,
-    private val agentActivityHolder: sh.haven.core.data.agent.AgentActivityHolder,
-    private val terminalInputQueue: TerminalInputQueue,
-    private val prootInstallLogRepository: sh.haven.core.data.repository.ProotInstallLogRepository,
-    private val sshKeyRepository: sh.haven.core.data.repository.SshKeyRepository,
-    private val knownHostDao: sh.haven.core.data.db.KnownHostDao,
-    private val stepCaConfigRepository: sh.haven.core.data.repository.StepCaConfigRepository,
-    private val totpSecretRepository: sh.haven.core.data.repository.TotpSecretRepository,
-    private val ageIdentityRepository: sh.haven.core.data.repository.AgeIdentityRepository,
-    private val desktopSessionRegistry: sh.haven.core.data.desktop.DesktopSessionRegistry,
-    private val aiRouteRegistry: sh.haven.core.openai.AiRouteRegistry,
-    private val usbBroker: sh.haven.core.usb.UsbBroker,
-    private val usbIpServer: sh.haven.core.usb.UsbIpServer,
-    private val usbRedirServer: sh.haven.core.usb.UsbRedirServer,
-    private val usbDriveVmManager: sh.haven.app.usb.UsbDriveVmManager,
-    private val umlRecoveryManager: sh.haven.app.usb.UmlRecoveryManager,
-    private val presentationManager: sh.haven.core.data.agent.AgentPresentationManager,
     private val mcpStatusHolder: sh.haven.core.data.agent.McpStatusHolder,
-    private val mcpTunnelManager: McpTunnelManager,
-    // Serial session managers for the serial↔TCP bridge (bridge_serial_to_tcp).
-    private val btSerialSessionManager: sh.haven.core.btserial.BtSerialSessionManager,
-    private val bleSerialSessionManager: sh.haven.core.bleserial.BleSerialSessionManager,
-    private val usbSerialSessionManager: sh.haven.core.usbserial.UsbSerialSessionManager,
-    // OpenAI endpoint (openai_* tools): the session manager holding connect-time
-    // model caches, plus the tunnel resolver so an MCP chat on a tunnel-routed
-    // profile dials through the tunnel (fail closed) like the connect path does.
-    private val openAiSessionManager: sh.haven.core.openai.OpenAiSessionManager,
-    private val tunnelResolver: sh.haven.core.tunnel.TunnelResolver,
-    // Capture + drive Haven's OWN rendered UI (self-hosting loop, §1a).
-    // Registered with the foreground activity by MainActivity.onResume.
-    private val havenUiBridge: HavenUiBridge,
     // Tier-3 standing policies: scoped, rate-capped, expiring no-prompt
     // grants consulted at the consent gate (VISION.md "Consent tiers").
     private val standingPolicyEnforcer: StandingPolicyEnforcer,
-    private val standingPolicyRepository: sh.haven.core.data.repository.StandingPolicyRepository,
-    // One-shot exec on a saved SSH profile for run_command (#367).
-    private val headlessSshExec: HeadlessSshExec,
-    // Secure-chip source for generate_ssh_key's hardwareBacked branch
-    // (Hilt-bound HardwareSshKeyManager via HardwareKeySource), plus the
-    // strong-biometry gate that branch refuses without.
-    private val hardwareKeySource: sh.haven.core.security.HardwareKeySource,
-    private val biometricAuthenticator: sh.haven.core.security.BiometricAuthenticator? = null,
-    // Defaulted so the manual McpServer constructions in unit tests (which
-    // don't exercise the auth-prompt verbs) compile without it; Hilt always
-    // injects the real @Singleton in production.
-    private val pendingAuthPromptHolder: sh.haven.core.data.agent.PendingAuthPromptHolder =
-        sh.haven.core.data.agent.PendingAuthPromptHolder(),
-    // Same as above: defaulted for the manual test constructions; Hilt injects
-    // the real @Singleton so this mirrors the same instance ConnectionsViewModel
-    // writes the session-manager picker state to.
-    private val sessionSelectionHolder: sh.haven.core.data.agent.SessionSelectionHolder =
-        sh.haven.core.data.agent.SessionSelectionHolder(),
-    // Per-tool on/off switches (#755): defaulted for the manual test
-    // constructions; Hilt injects the real @Singleton, which Settings also
-    // observes, so the phone-side toggle list and the dispatcher share one store.
-    private val toolCatalog: sh.haven.core.data.agent.McpToolCatalog? = null,
-    // RapidOCR + 2D k-d tree screen indexer for inspect_desktop_tab / tap_desktop_text.
-    private val textRecognizer: sh.haven.core.scan.TextRecognizer? = null,
+    private val tools: McpTools,
 ) : Closeable {
+
+    internal constructor(
+        context: Context,
+        connectionRepository: ConnectionRepository,
+        portForwardRepository: PortForwardRepository,
+        sshSessionManager: SshSessionManager,
+        sessionManagerRegistry: SessionManagerRegistry,
+        reticulumSessionManager: sh.haven.core.reticulum.ReticulumSessionManager,
+        reticulumForwardServer: sh.haven.core.reticulum.ReticulumForwardServer,
+        rcloneClient: RcloneClient,
+        mailSessionManager: sh.haven.core.mail.MailSessionManager,
+        sftpStreamServer: SftpStreamServer,
+        hlsStreamServer: HlsStreamServer,
+        ffmpegExecutor: FfmpegExecutor,
+        preferencesRepository: UserPreferencesRepository,
+        terminalFontInstaller: TerminalFontInstaller,
+        localSessionManager: LocalSessionManager,
+        auditRecorder: AgentAuditRecorder,
+        consentManager: AgentConsentManager,
+        agentUiCommandBus: sh.haven.core.data.agent.AgentUiCommandBus,
+        transportSelector: sh.haven.feature.sftp.transport.TransportSelector,
+        workspaceRepository: sh.haven.core.data.repository.WorkspaceRepository,
+        workspaceLauncher: sh.haven.app.workspace.WorkspaceLauncher,
+        tunnelConfigRepository: sh.haven.core.data.repository.TunnelConfigRepository,
+        tunnelManager: sh.haven.core.tunnel.TunnelManager,
+        terminalSessionRegistry: sh.haven.feature.terminal.agent.TerminalSessionRegistry,
+        portKnocker: sh.haven.core.knock.PortKnocker,
+        spaSender: sh.haven.core.spa.SpaSender,
+        connectionLogRepository: sh.haven.core.data.repository.ConnectionLogRepository,
+        servedFileTracker: sh.haven.core.data.agent.ServedFileTracker,
+        syncProfileRepository: sh.haven.core.data.repository.SyncProfileRepository,
+        mailRuleRepository: sh.haven.core.data.repository.MailRuleRepository,
+        mailWatchManager: sh.haven.app.agent.mailrules.MailWatchManager,
+        agentActivityHolder: sh.haven.core.data.agent.AgentActivityHolder,
+        terminalInputQueue: TerminalInputQueue,
+        prootInstallLogRepository: sh.haven.core.data.repository.ProotInstallLogRepository,
+        sshKeyRepository: sh.haven.core.data.repository.SshKeyRepository,
+        knownHostDao: sh.haven.core.data.db.KnownHostDao,
+        stepCaConfigRepository: sh.haven.core.data.repository.StepCaConfigRepository,
+        totpSecretRepository: sh.haven.core.data.repository.TotpSecretRepository,
+        ageIdentityRepository: sh.haven.core.data.repository.AgeIdentityRepository,
+        desktopSessionRegistry: sh.haven.core.data.desktop.DesktopSessionRegistry,
+        aiRouteRegistry: sh.haven.core.openai.AiRouteRegistry,
+        usbBroker: sh.haven.core.usb.UsbBroker,
+        usbIpServer: sh.haven.core.usb.UsbIpServer,
+        usbRedirServer: sh.haven.core.usb.UsbRedirServer = sh.haven.core.usb.UsbRedirServer(usbBroker),
+        usbDriveVmManager: sh.haven.app.usb.UsbDriveVmManager,
+        umlRecoveryManager: sh.haven.app.usb.UmlRecoveryManager,
+        presentationManager: sh.haven.core.data.agent.AgentPresentationManager,
+        mcpStatusHolder: sh.haven.core.data.agent.McpStatusHolder,
+        mcpTunnelManager: McpTunnelManager,
+        btSerialSessionManager: sh.haven.core.btserial.BtSerialSessionManager? = null,
+        bleSerialSessionManager: sh.haven.core.bleserial.BleSerialSessionManager? = null,
+        usbSerialSessionManager: sh.haven.core.usbserial.UsbSerialSessionManager? = null,
+        openAiSessionManager: sh.haven.core.openai.OpenAiSessionManager? = null,
+        tunnelResolver: sh.haven.core.tunnel.TunnelResolver? = null,
+        havenUiBridge: HavenUiBridge,
+        standingPolicyEnforcer: StandingPolicyEnforcer,
+        standingPolicyRepository: sh.haven.core.data.repository.StandingPolicyRepository,
+        headlessSshExec: HeadlessSshExec? = null,
+        hardwareKeySource: sh.haven.core.security.HardwareKeySource? = null,
+        biometricAuthenticator: sh.haven.core.security.BiometricAuthenticator? = null,
+        pendingAuthPromptHolder: sh.haven.core.data.agent.PendingAuthPromptHolder =
+            sh.haven.core.data.agent.PendingAuthPromptHolder(),
+        sessionSelectionHolder: sh.haven.core.data.agent.SessionSelectionHolder =
+            sh.haven.core.data.agent.SessionSelectionHolder(),
+        toolCatalog: sh.haven.core.data.agent.McpToolCatalog? = null,
+        textRecognizer: sh.haven.core.scan.TextRecognizer? = null,
+    ) : this(
+        context = context,
+        preferencesRepository = preferencesRepository,
+        auditRecorder = auditRecorder,
+        consentManager = consentManager,
+        tunnelConfigRepository = tunnelConfigRepository,
+        tunnelManager = tunnelManager,
+        mcpStatusHolder = mcpStatusHolder,
+        standingPolicyEnforcer = standingPolicyEnforcer,
+        tools = McpTools(
+            context = context,
+            connectionRepository = connectionRepository,
+            portForwardRepository = portForwardRepository,
+            sshSessionManager = sshSessionManager,
+            sessionManagerRegistry = sessionManagerRegistry,
+            reticulumSessionManager = reticulumSessionManager,
+            reticulumForwardServer = reticulumForwardServer,
+            rcloneClient = rcloneClient,
+            mailSessionManager = mailSessionManager,
+            sftpStreamServer = sftpStreamServer,
+            hlsStreamServer = hlsStreamServer,
+            ffmpegExecutor = ffmpegExecutor,
+            preferencesRepository = preferencesRepository,
+            terminalFontInstaller = terminalFontInstaller,
+            localSessionManager = localSessionManager,
+            agentUiCommandBus = agentUiCommandBus,
+            transportSelector = transportSelector,
+            workspaceRepository = workspaceRepository,
+            workspaceLauncher = workspaceLauncher,
+            tunnelConfigRepository = tunnelConfigRepository,
+            tunnelManager = tunnelManager,
+            terminalSessionRegistry = terminalSessionRegistry,
+            portKnocker = portKnocker,
+            spaSender = spaSender,
+            connectionLogRepository = connectionLogRepository,
+            servedFileTracker = servedFileTracker,
+            syncProfileRepository = syncProfileRepository,
+            mailRuleRepository = mailRuleRepository,
+            mailWatchManager = mailWatchManager,
+            agentActivityHolder = agentActivityHolder,
+            terminalInputQueue = terminalInputQueue,
+            prootInstallLogRepository = prootInstallLogRepository,
+            sshKeyRepository = sshKeyRepository,
+            knownHostDao = knownHostDao,
+            stepCaConfigRepository = stepCaConfigRepository,
+            totpSecretRepository = totpSecretRepository,
+            ageIdentityRepository = ageIdentityRepository,
+            desktopSessionRegistry = desktopSessionRegistry,
+            aiRouteRegistry = aiRouteRegistry,
+            usbBroker = usbBroker,
+            usbIpServer = usbIpServer,
+            usbRedirServer = usbRedirServer,
+            usbDriveVmManager = usbDriveVmManager,
+            umlRecoveryManager = umlRecoveryManager,
+            presentationManager = presentationManager,
+            havenUiBridge = havenUiBridge,
+            standingPolicyRepository = standingPolicyRepository,
+            mcpTunnelManager = mcpTunnelManager,
+            mcpStatusHolder = mcpStatusHolder,
+            btSerialSessionManager = btSerialSessionManager,
+            bleSerialSessionManager = bleSerialSessionManager,
+            usbSerialSessionManager = usbSerialSessionManager,
+            openAiSessionManager = openAiSessionManager,
+            tunnelResolver = tunnelResolver,
+            headlessSshExec = headlessSshExec,
+            hardwareKeySource = hardwareKeySource,
+            biometricAuthenticator = biometricAuthenticator,
+            pendingAuthPromptHolder = pendingAuthPromptHolder,
+            sessionSelectionHolder = sessionSelectionHolder,
+            agentConsentManager = consentManager,
+            toolCatalog = toolCatalog,
+            textRecognizer = textRecognizer,
+        ),
+    )
 
     /**
      * Transport-level budget for a consent prompt. The manager's own
@@ -279,18 +344,6 @@ class McpServer @Inject constructor(
      * shrink the real-time wait.
      */
     internal var consentWaitMs: Long = CONSENT_WAIT_MS
-
-    /**
-     * Last authenticated (or, on `initialize`, self-asserted) client name.
-     * Used for AUDIT attribution and as the key for consent memos /
-     * standing policies — never as authentication (#mcp-backbone Stage 3):
-     * the dispatch gate accepts only a bearer pairing token or a session id
-     * minted by an authenticated `initialize` in this process. Set from the
-     * bearer/session resolution on every authenticated request, so grant
-     * keys are backed by a real credential.
-     */
-    @Volatile
-    private var lastClientHint: String? = null
 
     /**
      * In-memory mirror of [UserPreferencesRepository.mcpClientTokenHashes]
@@ -464,71 +517,9 @@ class McpServer @Inject constructor(
             """.trimIndent()
         }
 
-    private val tools = McpTools(
-        context = context,
-        connectionRepository = connectionRepository,
-        portForwardRepository = portForwardRepository,
-        sshSessionManager = sshSessionManager,
-        sessionManagerRegistry = sessionManagerRegistry,
-        reticulumSessionManager = reticulumSessionManager,
-        reticulumForwardServer = reticulumForwardServer,
-        rcloneClient = rcloneClient,
-        mailSessionManager = mailSessionManager,
-        sftpStreamServer = sftpStreamServer,
-        hlsStreamServer = hlsStreamServer,
-        ffmpegExecutor = ffmpegExecutor,
-        preferencesRepository = preferencesRepository,
-        terminalFontInstaller = terminalFontInstaller,
-        localSessionManager = localSessionManager,
-        agentUiCommandBus = agentUiCommandBus,
-        transportSelector = transportSelector,
-        workspaceRepository = workspaceRepository,
-        workspaceLauncher = workspaceLauncher,
-        tunnelConfigRepository = tunnelConfigRepository,
-        tunnelManager = tunnelManager,
-        terminalSessionRegistry = terminalSessionRegistry,
-        portKnocker = portKnocker,
-        spaSender = spaSender,
-        connectionLogRepository = connectionLogRepository,
-        servedFileTracker = servedFileTracker,
-        syncProfileRepository = syncProfileRepository,
-        mailRuleRepository = mailRuleRepository,
-        mailWatchManager = mailWatchManager,
-        agentActivityHolder = agentActivityHolder,
-        terminalInputQueue = terminalInputQueue,
-        prootInstallLogRepository = prootInstallLogRepository,
-        sshKeyRepository = sshKeyRepository,
-        knownHostDao = knownHostDao,
-        stepCaConfigRepository = stepCaConfigRepository,
-        totpSecretRepository = totpSecretRepository,
-        ageIdentityRepository = ageIdentityRepository,
-        desktopSessionRegistry = desktopSessionRegistry,
-        aiRouteRegistry = aiRouteRegistry,
-        usbBroker = usbBroker,
-        usbIpServer = usbIpServer,
-        usbRedirServer = usbRedirServer,
-        usbDriveVmManager = usbDriveVmManager,
-        umlRecoveryManager = umlRecoveryManager,
-        presentationManager = presentationManager,
-        havenUiBridge = havenUiBridge,
-        standingPolicyRepository = standingPolicyRepository,
-        mcpTunnelManager = mcpTunnelManager,
-        mcpStatusHolder = mcpStatusHolder,
-        btSerialSessionManager = btSerialSessionManager,
-        bleSerialSessionManager = bleSerialSessionManager,
-        usbSerialSessionManager = usbSerialSessionManager,
-        openAiSessionManager = openAiSessionManager,
-        tunnelResolver = tunnelResolver,
-        headlessSshExec = headlessSshExec,
-        hardwareKeySource = hardwareKeySource,
-        biometricAuthenticator = biometricAuthenticator,
-        pendingAuthPromptHolder = pendingAuthPromptHolder,
-        sessionSelectionHolder = sessionSelectionHolder,
-        agentConsentManager = consentManager,
-        toolCatalog = toolCatalog,
-        textRecognizer = textRecognizer,
-        mcpPortProvider = { port },
-    )
+    init {
+        tools.mcpPortProvider = { port }
+    }
 
     /**
      * Invoke an MCP tool by name, BYPASSING the interactive consent gate. For the
@@ -1124,6 +1115,15 @@ class McpServer @Inject constructor(
     private fun dispatchHttpRequest(req: ParsedHttpRequest, origin: McpOrigin): HttpResponse {
         val method = req.method
         val path = req.path
+        // Loopback DNS-rebinding guard: listeners bound to 127.0.0.1 must also
+        // reject non-loopback HTTP `Host` headers (e.g. `rebind.attacker.tld:8730`
+        // sent by a browser simple-POST after DNS TTL expiry).
+        if (origin == McpOrigin.DEVICE || origin == McpOrigin.TUNNELED) {
+            val hostHeader = req.headers["host"]
+            if (hostHeader != null && !sh.haven.core.mcp.isLoopbackHttpHost(hostHeader)) {
+                return textResponse(403, "Forbidden")
+            }
+        }
         return when {
             method == "POST" && (path == "/mcp" || path == "/") -> {
                 // DNS-rebinding / CSRF guard (#mcp-backbone Stage 0): a browser
@@ -1287,13 +1287,13 @@ class McpServer @Inject constructor(
         // pairing prompt/audit, never authentication (#mcp-backbone Stage 3).
         val authClient: String? = bearerToken?.let { resolveBearer(it) }
         val sessionClient: String? = requestSessionId?.let { sessions[it]?.clientName }
-        when {
-            authClient != null -> lastClientHint = authClient
-            sessionClient != null -> lastClientHint = sessionClient
+        val callerHint: String? = when {
+            authClient != null -> authClient
+            sessionClient != null -> sessionClient
             method == "initialize" ->
                 params.optJSONObject("clientInfo")?.optString("name")
                     ?.takeIf { it.isNotEmpty() }
-                    ?.let { lastClientHint = it }
+            else -> null
         }
 
         val started = System.nanoTime()
@@ -1302,18 +1302,17 @@ class McpServer @Inject constructor(
         var resultJson: JSONObject? = null
         var newSessionId: String? = null
         val response = try {
-            val result = dispatch(method, params, requestSessionId, origin, authClient)
+            val result = dispatch(method, params, requestSessionId, origin, authClient, callerHint)
             if (result is JSONObject) resultJson = result
             // A successful `initialize` mints a new session id we'll
             // hand back to the client in the response header. The
             // client echoes it on subsequent requests and we resolve
             // it back to a clientName without re-prompting.
             if (method == "initialize" && result is JSONObject) {
-                val clientName = lastClientHint
-                if (!clientName.isNullOrBlank()) {
+                if (!callerHint.isNullOrBlank()) {
                     purgeExpiredSessions()
                     val sid = UUID.randomUUID().toString()
-                    sessions[sid] = Session(clientName, System.currentTimeMillis())
+                    sessions[sid] = Session(callerHint, System.currentTimeMillis())
                     newSessionId = sid
                 }
             }
@@ -1376,7 +1375,7 @@ class McpServer @Inject constructor(
                 durationMs = durationMs,
                 outcome = outcome,
                 errorMessage = errorMessage,
-                clientHint = lastClientHint,
+                clientHint = callerHint,
             )
         }
 
@@ -1410,6 +1409,7 @@ class McpServer @Inject constructor(
         requestSessionId: String?,
         origin: McpOrigin,
         authClient: String? = null,
+        callerHint: String? = null,
     ): Any? {
         // Loopback auto-trust: only a DEVICE-origin client (the plain
         // loopback binder) can be treated as already-paired and
@@ -1458,9 +1458,9 @@ class McpServer @Inject constructor(
             "initialize" -> handleInitialize(params, trusted, authClient)
             "notifications/initialized" -> JSONObject() // ack
             "tools/list" -> handleToolsList()
-            "tools/call" -> handleToolsCall(params, trusted, origin)
+            "tools/call" -> handleToolsCall(params, trusted, origin, callerHint)
             "resources/list" -> handleResourcesList()
-            "resources/read" -> handleResourcesRead(params, trusted)
+            "resources/read" -> handleResourcesRead(params, trusted, callerHint)
             "ping" -> JSONObject()
             else -> throw McpError(-32601, "Method not found: $method")
         }
@@ -1606,7 +1606,7 @@ class McpServer @Inject constructor(
         })
     }
 
-    private fun handleResourcesRead(params: JSONObject, trusted: Boolean): JSONObject {
+    private fun handleResourcesRead(params: JSONObject, trusted: Boolean, callerHint: String?): JSONObject {
         val uri = params.optString("uri")
         tools.readToolCategoryResource(uri)?.let { markdown ->
             return JSONObject().apply {
@@ -1627,14 +1627,14 @@ class McpServer @Inject constructor(
         // A standing policy covering capture_haven_ui covers the resource
         // read too (same memo key, same gate, same audit).
         val policyAllowed = !trusted && runBlocking {
-            standingPolicyEnforcer.permits(lastClientHint, "capture_haven_ui", JSONObject())
+            standingPolicyEnforcer.permits(callerHint, "capture_haven_ui", JSONObject())
         }
         if (!trusted && !policyAllowed) {
             val decision = runBlocking {
                 withTimeoutOrNull(consentWaitMs + CONSENT_TIMEOUT_GRACE_MS) {
                     consentManager.requestConsent(
                         toolName = "capture_haven_ui",
-                        clientHint = lastClientHint,
+                        clientHint = callerHint,
                         summary = "Let the agent see Haven's own screen",
                         level = ConsentLevel.ONCE_PER_SESSION,
                         timeoutMs = consentWaitMs,
@@ -1665,6 +1665,7 @@ class McpServer @Inject constructor(
         params: JSONObject,
         trusted: Boolean,
         origin: McpOrigin = McpOrigin.LAN,
+        callerHint: String? = null,
     ): JSONObject {
         val name = params.optString("name", "")
             .ifEmpty { throw McpError(-32602, "Missing tool name") }
@@ -1696,9 +1697,9 @@ class McpServer @Inject constructor(
         // a rate ceiling hit) falls through to the normal prompt. Only
         // evaluated where a prompt would otherwise be needed.
         val policyAllowed = !trusted && consent != null && consent.level != ConsentLevel.NEVER &&
-            runBlocking { standingPolicyEnforcer.permits(lastClientHint, name, arguments) }
+            runBlocking { standingPolicyEnforcer.permits(callerHint, name, arguments) }
         if (policyAllowed) {
-            Log.i(TAG, "tools/call '$name' allowed by standing policy for '$lastClientHint'")
+            Log.i(TAG, "tools/call '$name' allowed by standing policy for '$callerHint'")
         }
         if (!trusted && !policyAllowed && consent != null && consent.level != ConsentLevel.NEVER) {
             val summary = try {
@@ -1724,7 +1725,7 @@ class McpServer @Inject constructor(
                 withTimeoutOrNull(consentWaitMs + CONSENT_TIMEOUT_GRACE_MS) {
                     consentManager.requestConsent(
                         toolName = name,
-                        clientHint = lastClientHint,
+                        clientHint = callerHint,
                         summary = summary,
                         level = consent.level,
                         operationKey = operationKey,
@@ -1744,7 +1745,7 @@ class McpServer @Inject constructor(
         }
         mcpStatusHolder.callStarted(name)
         val result = try {
-            runBlocking { tools.callTyped(name, arguments, lastClientHint, origin.name) }
+            runBlocking { tools.callTyped(name, arguments, callerHint, origin.name) }
         } catch (e: McpError) {
             mcpStatusHolder.callFinished(name, e.message)
             throw e

@@ -34,6 +34,7 @@ dependencies {
     implementation(project(":core:terminal-haven"))
     implementation(project(":core:toolbar"))
     implementation(project(":core:data"))
+    implementation(project(":core:session"))
     implementation(project(":core:ssh"))
     // Security-key (FIDO2/SK) authenticator, wired onto new-tab SshClients.
     implementation(project(":core:fido"))
@@ -53,10 +54,6 @@ dependencies {
     // upload pipeline (TerminalAttachCoordinator) — depending on the SFTP
     // module is therefore intentional, not a layering accident.
     implementation(project(":feature:sftp"))
-    // Reuse the Connections feature's FidoTouchPromptDialog so a security-key
-    // re-auth triggered from the terminal (a fresh-dial new tab) surfaces the
-    // same touch/PIN prompt instead of hanging silently.
-    implementation(project(":feature:connections"))
 
     implementation(libs.core.ktx)
     implementation(libs.activity.compose)
