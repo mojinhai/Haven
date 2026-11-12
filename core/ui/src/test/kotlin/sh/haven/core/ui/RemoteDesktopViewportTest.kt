@@ -246,4 +246,205 @@ class RemoteDesktopViewportTest {
         assertEquals(DesktopOrientationMode.Landscape, DesktopOrientationMode.Auto.next())
         assertEquals(DesktopOrientationMode.Landscape, DesktopOrientationMode.fromActivityValue(-999))
     }
+
+    @Test
+    fun `configurable desktop mouse gestures resolve long-press, two-finger, and three-finger actions`() {
+        assertEquals(DesktopGestureAction.RIGHT_CLICK, DesktopGestureAction.fromStorage("RIGHT_CLICK", DesktopGestureAction.NONE))
+        assertEquals(DesktopGestureAction.MIDDLE_CLICK, DesktopGestureAction.fromStorage("UNKNOWN", DesktopGestureAction.MIDDLE_CLICK))
+        assertEquals(DesktopGestureAction.NONE, DesktopGestureAction.fromStorage(null, DesktopGestureAction.NONE))
+
+        val fired = mutableListOf<String>()
+        for (action in DesktopGestureAction.entries) {
+            dispatchDesktopGestureAction(
+                action = action,
+                x = 120,
+                y = 340,
+                onLeftClick = { x, y -> fired += "L:$x,$y" },
+                onMiddleClick = { x, y -> fired += "M:$x,$y" },
+                onRightClick = { x, y -> fired += "R:$x,$y" },
+            )
+        }
+        assertEquals(listOf("R:120,340", "M:120,340", "L:120,340"), fired)
+
+        // Disabling long-press cancels the timeout timer AND suppresses stationary holds >= longPressMs,
+        // while keeping normal short taps (< longPressMs) and hardware mouse clicks intact (#836).
+        assertFalse(
+            shouldFireRemoteTouchLongPressRightClick(
+                isMouseDevice = false,
+                totalFingers = 1,
+                longPressFired = false,
+                dragging = false,
+                totalMovement = 1f,
+                touchSlopPx = 18f,
+                isFollowUpTouch = false,
+                longPressAction = DesktopGestureAction.NONE,
+            ),
+        )
+        assertEquals(
+            Long.MAX_VALUE,
+            remainingRemoteTouchLongPressTimeoutMs(
+                isMouseDevice = false,
+                totalFingers = 1,
+                longPressFired = false,
+                dragging = false,
+                totalMovement = 1f,
+                touchSlopPx = 18f,
+                isFollowUpTouch = false,
+                longPressAction = DesktopGestureAction.NONE,
+                longPressMs = 400L,
+                elapsedMs = 50L,
+            ),
+        )
+        assertTrue(
+            shouldFireRemotePostGestureTap(
+                totalFingers = 1,
+                totalMovement = 2f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                isMouseDevice = false,
+                longPressDisabled = true,
+                gestureDurationMs = 150L,
+                longPressMs = 400L,
+            ),
+        )
+        assertFalse(
+            shouldFireRemotePostGestureTap(
+                totalFingers = 1,
+                totalMovement = 2f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                isMouseDevice = false,
+                longPressDisabled = true,
+                gestureDurationMs = 450L,
+                longPressMs = 400L,
+            ),
+        )
+        assertTrue(
+            shouldFireRemotePostGestureTap(
+                totalFingers = 1,
+                totalMovement = 0f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                isMouseDevice = true,
+                longPressDisabled = true,
+                gestureDurationMs = 900L,
+                longPressMs = 400L,
+            ),
+        )
+
+        val precisionTouchpad = DesktopMouseGestureConfig(
+            longPressAction = DesktopGestureAction.NONE,
+            twoFingerTapAction = DesktopGestureAction.RIGHT_CLICK,
+            threeFingerTapAction = DesktopGestureAction.MIDDLE_CLICK,
+        )
+        assertEquals(
+            DesktopGestureAction.RIGHT_CLICK,
+            resolveRemoteMultiFingerTapAction(
+                isMouseDevice = false,
+                totalFingers = 2,
+                multiFingerMovement = 4f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                heldButton = null,
+                gestures = precisionTouchpad,
+            ),
+        )
+        assertEquals(
+            DesktopGestureAction.MIDDLE_CLICK,
+            resolveRemoteMultiFingerTapAction(
+                isMouseDevice = false,
+                totalFingers = 3,
+                multiFingerMovement = 6f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                heldButton = null,
+                gestures = precisionTouchpad,
+            ),
+        )
+        // Pinch/scroll motion >= touchSlopPx suppresses multi-finger tap click
+        assertEquals(
+            DesktopGestureAction.NONE,
+            resolveRemoteMultiFingerTapAction(
+                isMouseDevice = false,
+                totalFingers = 2,
+                multiFingerMovement = 24f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                heldButton = null,
+                gestures = precisionTouchpad,
+            ),
+        )
+        // Held toolbar button or 4-finger gesture yields NONE
+        assertEquals(
+            DesktopGestureAction.NONE,
+            resolveRemoteMultiFingerTapAction(
+                isMouseDevice = false,
+                totalFingers = 2,
+                multiFingerMovement = 0f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                heldButton = 1,
+                gestures = precisionTouchpad,
+            ),
+        )
+        assertEquals(
+            DesktopGestureAction.NONE,
+            resolveRemoteMultiFingerTapAction(
+                isMouseDevice = false,
+                totalFingers = 4,
+                multiFingerMovement = 0f,
+                touchSlopPx = 18f,
+                longPressFired = false,
+                heldButton = null,
+                gestures = precisionTouchpad,
+            ),
+        )
+    }
+
+    @Test
+    fun `RemoteDesktopViewportState seeds virtualCursor from late CURSOR_INIT before user touch and preserves cursor across Saver`() {
+        // Initial mount happens when display frame arrives while cursor channel is still at (0, 0).
+        val state = RemoteDesktopViewportState(initialCursor = 0 to 0)
+        state.syncVirtualCursorSeed(inputMode = "TOUCHPAD", pointerPos = 0 to 0)
+        assertEquals(0 to 0, state.virtualCursor)
+
+        // Late SPICE_MSG_CURSOR_INIT arrives with guest pointer at (220, 190) before any user touch:
+        // virtualCursor must adopt (220, 190) so relative server-mode deltas can reach (0, 0) (#608).
+        state.syncVirtualCursorSeed(inputMode = "TOUCHPAD", pointerPos = 220 to 190)
+        assertEquals(220 to 190, state.virtualCursor)
+
+        // User now steps (-220, -190) on touchpad -> reaches top-left (0, 0) cleanly without clamping early.
+        assertEquals(0 to 0, state.stepVirtualCursor(-220f, -190f, fbWidth = 1024, fbHeight = 768))
+
+        // Once the user has moved the touchpad cursor, server pointerPos echoes must NOT snap
+        // sub-pixel virtualCursorF or overwrite user-driven tracking.
+        state.stepVirtualCursor(15.6f, 24.4f, fbWidth = 1024, fbHeight = 768)
+        assertEquals(15 to 24, state.virtualCursor)
+        state.syncVirtualCursorSeed(inputMode = "TOUCHPAD", pointerPos = 400 to 300)
+        assertEquals(15 to 24, state.virtualCursor)
+        assertEquals(15.6f, state.virtualCursorF.x, 0.001f)
+        assertEquals(24.4f, state.virtualCursorF.y, 0.001f)
+
+        // Switching inputMode (DIRECT -> TOUCHPAD) re-seeds from current pointerPos.
+        state.syncVirtualCursorSeed(inputMode = "DIRECT", pointerPos = 512 to 384)
+        state.syncVirtualCursorSeed(inputMode = "TOUCHPAD", pointerPos = 512 to 384)
+        assertEquals(512 to 384, state.virtualCursor)
+
+        // Saver round-trip (fullscreen / rotation restore) preserves sub-pixel virtualCursor and user-moved bit.
+        state.applyTransform(RemoteViewportTransform(zoom = 1.5f, panX = -40f, panY = 25f))
+        state.stepVirtualCursor(10.5f, -5.25f, fbWidth = 1024, fbHeight = 768)
+        val saved = with(RemoteDesktopViewportState.Saver) {
+            androidx.compose.runtime.saveable.SaverScope { true }.save(state)
+        }!!
+        val restored = RemoteDesktopViewportState.Saver.restore(saved)!!
+        assertEquals(1.5f, restored.zoom, 0.001f)
+        assertEquals(-40f, restored.panX, 0.001f)
+        assertEquals(25f, restored.panY, 0.001f)
+        assertEquals(522 to 378, restored.virtualCursor)
+        assertEquals(522.5f, restored.virtualCursorF.x, 0.001f)
+        assertEquals(378.75f, restored.virtualCursorF.y, 0.001f)
+        // Restored user-moved state must also resist stale server pointerPos overwrite:
+        restored.syncVirtualCursorSeed(inputMode = "TOUCHPAD", pointerPos = 0 to 0)
+        assertEquals(522 to 378, restored.virtualCursor)
+    }
 }

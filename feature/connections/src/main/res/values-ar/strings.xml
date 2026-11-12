@@ -542,6 +542,11 @@
     <string name="rclone_import_select_count">استيراد %1$d من السجلات البعيدة</string>
     <string name="rclone_import_done">تم استيراد %1$d، وتخطي %2$d، وفشل %3$d.</string>
     <string name="rclone_import_menu">استيراد تهيئة rclone…</string>
+    <string name="rclone_import_already_added_overwrite">مضاف بالفعل (حدّد للاستبدال)</string>
+    <string name="rclone_import_orphaned_repair">موجود في rclone.conf بدون بطاقة (سيتم إصلاحه)</string>
+    <string name="rclone_import_reset_button">إعادة تعيين تخزين rclone…</string>
+    <string name="rclone_import_reset_confirm">هل تريد إزالة اتصالات rclone المحفوظة ومسح rclone.conf؟ سيتم الاحتفاظ بمفاتيح SSH والاتصالات الأخرى.</string>
+    <string name="rclone_import_reset_done">تم مسح %1$d من اتصالات التخزين و%2$d من وجهات rclone.conf.</string>
     <string name="connections_section_spice">إعدادات SPICE</string>
     <string name="connections_section_mcp">وكيل الذكاء الاصطناعي (MCP)</string>
     <string name="connections_rclone_configure_first">اضغط “تهيئة والتحقق” لحفظ هذا السجل البعيد قبل أن تتمكن من حفظ الاتصال.</string>
@@ -608,4 +613,13 @@
     <string name="connections_helper_saved_password">اختياري. مشفرة في Android Keystore وتُستخدم لتسجيل دخول SSH ولملء sudo المحمي بالبصمة في الطرفية.</string>
     <string name="connections_auth_banner_title">مصادقة SSH</string>
     <string name="connections_auth_banner_open_link">فتح الرابط</string>
+    <string name="connections_field_keyboard_layout">تخطيط لوحة المفاتيح</string>
+    <string name="connections_keyboard_layout_auto">تلقائي (لغة الجهاز)</string>
+    <string name="connections_helper_keyboard_layout_rdp">يعلن عن هذا التخطيط لخادم RDP ويطابق الأحرف المكتوبة مع رموز المسح الخاصة به.</string>
+    <string name="connections_helper_keyboard_layout_spice">يرسل SPICE رموز مسح خام، لذا اختر تخطيط لوحة المفاتيح المضبوط داخل الجهاز الافتراضي الضيف.</string>
+    <string name="connections_shizuku_shell_label">صدفة Shizuku</string>
+    <string name="connections_local_mode_proot">PRoot</string>
+    <string name="connections_local_mode_android">Android</string>
+    <string name="connections_local_mode_shizuku">Shizuku</string>
+    <string name="connections_local_shell_shizuku_desc">يشغّل صدفة Android بصلاحيات مرتفعة (/system/bin/sh) عبر Shizuku (معرّف ADB 2000 أو root). يتطلب أن تكون خدمة Shizuku قيد التشغيل ومصرّحًا بها.</string>
 </resources>

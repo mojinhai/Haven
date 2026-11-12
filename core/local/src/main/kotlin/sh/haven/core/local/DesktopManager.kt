@@ -841,7 +841,7 @@ class DesktopManager @Inject constructor(
     ): String {
         val instance = _desktops.value[de]
             ?: throw IllegalStateException("Desktop '${de.spec.id}' is not running")
-        val configuredUser = prootManager.ensureGuestUser(prootManager.activeRootfsDir)
+        val configuredUser = prootManager.ensureGuestUser(prootManager.activeRootfsDir, prootManager.activeDistroId)
         val guestUser = when (de.spec.launch) {
             is LaunchSpec.NestedWayland -> resolveNestedWaylandUser(configuredUser)
             else -> configuredUser
@@ -921,6 +921,7 @@ class DesktopManager @Inject constructor(
             "SHELL=/bin/sh",
             "TMPDIR=/tmp",
             "XDG_RUNTIME_DIR=/tmp",
+            "${ShizukuBridgeProtocol.SOCKET_ENV_VAR}=${ShizukuBridgeProtocol.GUEST_SOCKET_PATH}",
             "XDG_DATA_HOME=${guestUser.home}/.local/share",
             "XDG_DATA_DIRS=/usr/local/share:/usr/share",
             "XDG_CONFIG_HOME=${guestUser.home}/.config",
@@ -943,8 +944,9 @@ class DesktopManager @Inject constructor(
             context.applicationInfo.nativeLibraryDir, "libproot_loader.so",
         ).absolutePath
         val rootfsDir = prootManager.activeRootfsDir
+        prootManager.applyResolvConf(rootfsDir)
         val rootHome = File(rootfsDir, "root").apply { mkdirs() }
-        val guestUser = prootManager.ensureGuestUser(rootfsDir)
+        val guestUser = prootManager.ensureGuestUser(rootfsDir, prootManager.activeDistroId)
         val userHomeDir = File(rootfsDir, guestUser.home.trimStart('/')).apply { mkdirs() }
 
         val launch = de.spec.launch as LaunchSpec.X11Vnc
@@ -1056,6 +1058,7 @@ class DesktopManager @Inject constructor(
             "--kill-on-exit",
             // #325: foreign-arch rootfs runs through the bundled qemu-user loader.
             *prootManager.qemuUserArgs(prootManager.activeDistroId).toTypedArray(),
+            *prootManager.netPolicyArgs(prootManager.activeDistroId).toTypedArray(),
             "-r", rootfsDir.absolutePath,
             "-b", "/dev",
             "-b", "/dev/urandom:/dev/random",
@@ -1073,6 +1076,7 @@ class DesktopManager @Inject constructor(
             // desktop apps that use POSIX shared memory work. See ProotManager.
             "-b", "${prootManager.ensureDevShm()}:/dev/shm",
             "-b", "${context.cacheDir.absolutePath}:/tmp",
+            *prootManager.shizukuGuestBindArgs(rootfsDir, longForm = false),
             // #304: surface the device model at the devicetree path fastfetch reads.
             *(prootManager.deviceModelDevicetreeBind()?.let { arrayOf("-b", it) } ?: emptyArray()),
             // #304 part 2: optionally expose Android's system partitions (opt-in).
@@ -1197,8 +1201,11 @@ class DesktopManager @Inject constructor(
             context.applicationInfo.nativeLibraryDir, "libproot_loader.so",
         ).absolutePath
         val rootfsDir = prootManager.activeRootfsDir
+        prootManager.applyResolvConf(rootfsDir)
         File(rootfsDir, "root").mkdirs()
-        val guestUser = resolveNestedWaylandUser(prootManager.ensureGuestUser(rootfsDir))
+        val guestUser = resolveNestedWaylandUser(
+            prootManager.ensureGuestUser(rootfsDir, prootManager.activeDistroId),
+        )
         File(rootfsDir, guestUser.home.trimStart('/')).mkdirs()
 
         val xdgInProot = "/tmp/xdg-runtime-$display"
@@ -1380,6 +1387,7 @@ class DesktopManager @Inject constructor(
             prootBin, "-i", "${guestUser.uid}:${guestUser.gid}", "--kernel-release=6.2.1", "--link2symlink", "--sysvipc",
             // #325: foreign-arch rootfs runs through the bundled qemu-user loader.
             *prootManager.qemuUserArgs(prootManager.activeDistroId).toTypedArray(),
+            *prootManager.netPolicyArgs(prootManager.activeDistroId).toTypedArray(),
             "-r", rootfsDir.absolutePath,
             "-b", "/dev",
             "-b", "/dev/urandom:/dev/random",
@@ -1395,6 +1403,7 @@ class DesktopManager @Inject constructor(
             "-b", prootManager.selinuxMaskBind(rootfsDir),
             "-b", "${context.cacheDir.absolutePath}:/tmp",
             "-b", "${devShmHost.absolutePath}:/dev/shm",
+            *prootManager.shizukuGuestBindArgs(rootfsDir, longForm = false),
             // #304: surface the device model at the devicetree path fastfetch reads.
             *(prootManager.deviceModelDevicetreeBind()?.let { arrayOf("-b", it) } ?: emptyArray()),
             // #304 part 2: optionally expose Android's system partitions (opt-in).
@@ -1846,6 +1855,7 @@ class DesktopManager @Inject constructor(
                 context.applicationInfo.nativeLibraryDir, "libproot_loader.so",
             ).absolutePath
             val rootfsDir = prootManager.activeRootfsDir
+            prootManager.applyResolvConf(rootfsDir)
             android.system.Os.setenv("WLR_XWAYLAND", xwaylandWrapper.absolutePath, true)
             android.system.Os.setenv("HAVEN_PROOT_BIN", prootManager.prootBinary ?: "", true)
             android.system.Os.setenv("HAVEN_PROOT_LOADER", loaderPathXw, true)
@@ -1924,6 +1934,7 @@ class DesktopManager @Inject constructor(
                 prootBin, "-0", "--kernel-release=6.2.1", "--link2symlink", "--sysvipc",
                 // #325: foreign-arch rootfs runs through the bundled qemu-user loader.
                 *prootManager.qemuUserArgs(prootManager.activeDistroId).toTypedArray(),
+                *prootManager.netPolicyArgs(prootManager.activeDistroId).toTypedArray(),
                 *portRemap,
                 "-r", rootfsDir.absolutePath,
                 "-b", "/dev",
@@ -1940,6 +1951,7 @@ class DesktopManager @Inject constructor(
                 "-b", prootManager.selinuxMaskBind(rootfsDir),
                 "-b", "${context.cacheDir.absolutePath}:/tmp",
                 "-b", "${xdgDir.absolutePath}:/tmp/xdg-runtime",
+                *prootManager.shizukuGuestBindArgs(rootfsDir, longForm = false),
                 // #304: surface the device model at the devicetree path fastfetch reads.
                 *(prootManager.deviceModelDevicetreeBind()?.let { arrayOf("-b", it) } ?: emptyArray()),
                 // #304 part 2: optionally expose Android's system partitions (opt-in).

@@ -534,6 +534,11 @@
     <string name="rclone_import_select_count">원격 %1$d개 가져오기</string>
     <string name="rclone_import_done">가져옴 %1$d개, 건너뜀 %2$d개, 실패 %3$d개.</string>
     <string name="rclone_import_menu">rclone 구성 가져오기…</string>
+    <string name="rclone_import_already_added_overwrite">이미 추가됨(체크하여 덮어쓰기)</string>
+    <string name="rclone_import_orphaned_repair">카드 없이 rclone.conf에 존재함(복구 예정)</string>
+    <string name="rclone_import_reset_button">rclone 스토리지 초기화…</string>
+    <string name="rclone_import_reset_confirm">저장된 rclone 연결을 제거하고 rclone.conf를 비우시겠습니까? SSH 키와 다른 연결은 유지됩니다.</string>
+    <string name="rclone_import_reset_done">스토리지 연결 %1$d개와 rclone.conf 원격 %2$d개를 지웠습니다.</string>
     <string name="connections_section_spice">SPICE 설정</string>
     <string name="connections_section_mcp">AI 에이전트 (MCP)</string>
     <string name="connections_rclone_configure_first">연결을 저장하려면 먼저 “구성 및 확인”을 탭하여 이 원격을 저장하세요.</string>
@@ -600,4 +605,13 @@
     <string name="connections_helper_saved_password">선택 사항. Android Keystore에 암호화되어 저장되며 SSH 비밀번호 로그인 및 터미널의 생체인증 기반 sudo 자동 입력에 사용됩니다.</string>
     <string name="connections_auth_banner_title">SSH 인증</string>
     <string name="connections_auth_banner_open_link">링크 열기</string>
+    <string name="connections_field_keyboard_layout">키보드 레이아웃</string>
+    <string name="connections_keyboard_layout_auto">자동 (기기 로케일)</string>
+    <string name="connections_helper_keyboard_layout_rdp">RDP 서버에 이 레이아웃을 알리고 입력한 문자를 해당 스캔코드로 변환합니다.</string>
+    <string name="connections_helper_keyboard_layout_spice">SPICE는 원시 스캔코드를 전송하므로 게스트 VM 내부에 설정된 키보드 레이아웃을 선택하세요.</string>
+    <string name="connections_shizuku_shell_label">Shizuku 셸</string>
+    <string name="connections_local_mode_proot">PRoot</string>
+    <string name="connections_local_mode_android">Android</string>
+    <string name="connections_local_mode_shizuku">Shizuku</string>
+    <string name="connections_local_shell_shizuku_desc">Shizuku(ADB uid 2000 또는 root)를 통해 권한 있는 Android 셸(/system/bin/sh)을 실행합니다. Shizuku 서비스가 실행 중이고 권한이 허용되어 있어야 합니다.</string>
 </resources>

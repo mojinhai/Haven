@@ -155,6 +155,7 @@ class BackupService @Inject constructor(
                 put("rcloneRemoteName", p.rcloneRemoteName ?: JSONObject.NULL)
                 put("rcloneProvider", p.rcloneProvider ?: JSONObject.NULL)
                 put("useAndroidShell", p.useAndroidShell)
+                put("localShellMode", p.localShellMode ?: JSONObject.NULL)
                 put("forwardAgent", p.forwardAgent)
                 put("reticulumNetworkName", p.reticulumNetworkName ?: JSONObject.NULL)
                 put("reticulumPassphrase", p.reticulumPassphrase ?: JSONObject.NULL)
@@ -184,6 +185,7 @@ class BackupService @Inject constructor(
                 put("spicePassword", p.spicePassword ?: JSONObject.NULL)
                 put("spiceSshForward", p.spiceSshForward)
                 put("spiceSshProfileId", p.spiceSshProfileId ?: JSONObject.NULL)
+                put("keyboardLayout", p.keyboardLayout ?: JSONObject.NULL)
                 put("glkvmPort", p.glkvmPort ?: JSONObject.NULL)
                 put("glkvmPassword", p.glkvmPassword ?: JSONObject.NULL)
                 put("glkvmTargetLayout", p.glkvmTargetLayout ?: JSONObject.NULL)
@@ -774,6 +776,9 @@ class BackupService @Inject constructor(
                             rcloneRemoteName = c.optStringOrNull("rcloneRemoteName"),
                             rcloneProvider = c.optStringOrNull("rcloneProvider"),
                             useAndroidShell = c.optBoolean("useAndroidShell", false),
+                            localShellMode = c.optStringOrNull("localShellMode")?.takeIf { raw ->
+                                ConnectionProfile.LocalShellMode.entries.any { it.name == raw }
+                            },
                             prootDistroId = c.optStringOrNull("prootDistroId"),
                             forwardAgent = c.optBoolean("forwardAgent", false),
                             addressFamily = c.optString("addressFamily", "AUTO"),
@@ -817,6 +822,7 @@ class BackupService @Inject constructor(
                             spicePassword = c.optStringOrNull("spicePassword"),
                             spiceSshForward = c.optBoolean("spiceSshForward", false),
                             spiceSshProfileId = c.optStringOrNull("spiceSshProfileId"),
+                            keyboardLayout = c.optStringOrNull("keyboardLayout"),
                             glkvmPort = c.optIntOrNull("glkvmPort"),
                             glkvmPassword = c.optStringOrNull("glkvmPassword"),
                             glkvmTargetLayout = c.optStringOrNull("glkvmTargetLayout"),

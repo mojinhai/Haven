@@ -540,6 +540,11 @@
     <string name="rclone_import_select_count">导入 %1$d 个远程</string>
     <string name="rclone_import_done">已导入 %1$d 个，跳过 %2$d 个，失败 %3$d 个。</string>
     <string name="rclone_import_menu">导入 rclone 配置…</string>
+    <string name="rclone_import_already_added_overwrite">已添加（勾选以覆盖）</string>
+    <string name="rclone_import_orphaned_repair">在 rclone.conf 中存在但无卡片（将修复）</string>
+    <string name="rclone_import_reset_button">重置 rclone 存储…</string>
+    <string name="rclone_import_reset_confirm">移除已保存的 rclone 连接并清空 rclone.conf？SSH 密钥和其他连接将保留。</string>
+    <string name="rclone_import_reset_done">已清除 %1$d 个存储连接和 %2$d 个 rclone.conf 远程。</string>
     <string name="connections_section_spice">SPICE 设置</string>
     <string name="connections_section_mcp">AI 代理（MCP）</string>
     <string name="connections_rclone_configure_first">请先点按“配置并验证”保存此远程，然后才能保存连接。</string>
@@ -606,4 +611,13 @@
     <string name="connections_helper_saved_password">可选。在 Android Keystore 中加密保存，用于 SSH 密码登录以及终端中受生物识别保护的 sudo 自动填充。</string>
     <string name="connections_auth_banner_title">SSH 身份验证</string>
     <string name="connections_auth_banner_open_link">打开链接</string>
+    <string name="connections_field_keyboard_layout">键盘布局</string>
+    <string name="connections_keyboard_layout_auto">自动（设备语言区域）</string>
+    <string name="connections_helper_keyboard_layout_rdp">向 RDP 服务器声明此键盘布局，并将输入字符映射为对应扫描码。</string>
+    <string name="connections_helper_keyboard_layout_spice">SPICE 发送原始扫描码，请选择客户机虚拟机内配置的键盘布局。</string>
+    <string name="connections_shizuku_shell_label">Shizuku shell</string>
+    <string name="connections_local_mode_proot">PRoot</string>
+    <string name="connections_local_mode_android">Android</string>
+    <string name="connections_local_mode_shizuku">Shizuku</string>
+    <string name="connections_local_shell_shizuku_desc">通过 Shizuku（ADB uid 2000 或 root）运行特权 Android shell (/system/bin/sh)。需要 Shizuku 正在运行且已授权。</string>
 </resources>

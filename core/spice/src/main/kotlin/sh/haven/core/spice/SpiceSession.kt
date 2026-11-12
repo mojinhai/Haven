@@ -2,6 +2,8 @@ package sh.haven.core.spice
 
 import android.graphics.Bitmap
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import sh.haven.spice.CursorCallback
 import sh.haven.spice.CursorData
 import sh.haven.spice.FrameCallback
@@ -40,7 +42,10 @@ class SpiceSession(
     @Volatile
     private var closed = false
     private var client: SpiceClient? = null
-    private var currentBitmap: Bitmap? = null
+    private val frameBuffer = SpiceFrameBuffer<Bitmap>(
+        allocate = { w, h -> Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) },
+        writePixels = { bmp, pixels -> bmp.copyPixelsFromBuffer(ByteBuffer.wrap(pixels)) },
+    )
     private val startTime = System.currentTimeMillis()
 
     private fun log(level: String, msg: String) {
@@ -48,8 +53,19 @@ class SpiceSession(
         verboseBuffer?.add("+${System.currentTimeMillis() - startTime}ms [$TAG] $level: $msg")
     }
 
-    /** Called on each full-frame update. Set by the ViewModel. */
+    /**
+     * Called on each frame update. Set by the ViewModel.
+     *
+     * The [Bitmap] instance is reused in place across updates of the same
+     * surface dimensions (#607, matching [sh.haven.core.rdp.RdpSession] #422);
+     * observe [frameSeq] inside draw scopes to trigger repaints without
+     * recomposing the surrounding viewer chrome.
+     */
     var onFrameUpdate: ((Bitmap) -> Unit)? = null
+
+    /** Bumped once per in-place framebuffer update so draw scopes repaint (#607). */
+    val frameSeq: StateFlow<Long> get() = _frameSeq
+    private val _frameSeq = MutableStateFlow(0L)
 
     /**
      * Called when the server pushes a new cursor shape / visibility. Args mirror
@@ -61,8 +77,16 @@ class SpiceSession(
     /** Called when the server moves the pointer. Advisory in touchpad mode. */
     var onCursorPosition: ((Int, Int) -> Unit)? = null
 
-    /** Last non-null cursor shape, re-emitted when a position-only update arrives. */
-    private var lastCursor: Triple<Bitmap, Int, Int>? = null
+    /** Deduplicates cursor shape bitmaps across position-only `SPICE_MSG_CURSOR_MOVE` callbacks. */
+    private val cursorTracker = SpiceCursorTracker { cursor, w, h ->
+        cursorToBitmap(cursor, w, h)
+    }
+
+    @Volatile
+    private var lastFrameWidth: Int = 0
+
+    @Volatile
+    private var lastFrameHeight: Int = 0
 
     /** Called when an error occurs. */
     var onError: ((Exception) -> Unit)? = null
@@ -100,8 +124,15 @@ class SpiceSession(
                 override fun onFrame(frame: FrameData) {
                     if (closed) return
                     try {
-                        val bmp = frameToBitmap(frame)
-                        synchronized(this@SpiceSession) { currentBitmap = bmp }
+                        val frameW = frame.width.toInt()
+                        val frameH = frame.height.toInt()
+                        if (frameW != lastFrameWidth || frameH != lastFrameHeight) {
+                            lastFrameWidth = frameW
+                            lastFrameHeight = frameH
+                            log("D", "surface size: ${frameW}x${frameH}")
+                        }
+                        val bmp = frameBuffer.update(frame)
+                        _frameSeq.value = _frameSeq.value + 1
                         onFrameUpdate?.invoke(bmp)
                     } catch (e: Exception) {
                         log("E", "frameToBitmap failed (${frame.width}x${frame.height}, ${frame.pixels.size} bytes): ${e.message}")
@@ -113,19 +144,14 @@ class SpiceSession(
             c.setCursorCallback(object : CursorCallback {
                 override fun onCursor(cursor: CursorData) {
                     if (closed) return
-                    onCursorPosition?.invoke(cursor.x, cursor.y)
-                    val w = cursor.width.toInt()
-                    val h = cursor.height.toInt()
-                    if (!cursor.visible || w <= 0 || h <= 0 || cursor.pixels.size < w * h * 4) {
-                        onCursorUpdate?.invoke(null, 0, 0)
-                        return
-                    }
                     try {
-                        val bmp = cursorToBitmap(cursor, w, h)
-                        lastCursor = Triple(bmp, cursor.hotX.toInt(), cursor.hotY.toInt())
-                        onCursorUpdate?.invoke(bmp, cursor.hotX.toInt(), cursor.hotY.toInt())
+                        cursorTracker.onCursor(
+                            cursor = cursor,
+                            onPosition = onCursorPosition,
+                            onShape = onCursorUpdate,
+                        )
                     } catch (e: Exception) {
-                        log("E", "cursorToBitmap failed (${w}x$h): ${e.message}")
+                        log("E", "cursorToBitmap failed (${cursor.width}x${cursor.height}): ${e.message}")
                     }
                 }
             })
@@ -174,15 +200,6 @@ class SpiceSession(
         }
     }
 
-    /** Convert FrameData (RGBA, opaque) to an Android Bitmap. */
-    private fun frameToBitmap(frame: FrameData): Bitmap {
-        val w = frame.width.toInt()
-        val h = frame.height.toInt()
-        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(frame.pixels))
-        return bitmap
-    }
-
     /**
      * Convert a SPICE cursor shape (RGBA) to an Android Bitmap.
      * ponytail: SPICE ALPHA cursors are *premultiplied* RGBA, so copy the bytes
@@ -197,7 +214,7 @@ class SpiceSession(
     }
 
     /** Get the current frame as a Bitmap. */
-    fun getFrame(): Bitmap? = synchronized(this) { currentBitmap }
+    fun getFrame(): Bitmap? = frameBuffer.get()
 
     // --- Input forwarding ---
 
@@ -210,9 +227,10 @@ class SpiceSession(
     private var mouseMoveCount = 0L
 
     fun sendKey(scancode: Int, pressed: Boolean) {
-        if (closed) return
-        log("D", "input: key 0x${scancode.toString(16)} ${if (pressed) "down" else "up"}")
-        client?.sendKey(scancode.toUInt(), pressed)
+        if (closed || (scancode and 0x7F) == 0) return
+        val wire = spiceWireScancode(scancode, pressed)
+        log("D", "input: key 0x${scancode.toString(16)} (wire=0x${wire.toString(16)}) ${if (pressed) "down" else "up"}")
+        client?.sendKey(wire, pressed)
     }
 
     fun sendMouseMove(x: Int, y: Int) {
@@ -232,9 +250,9 @@ class SpiceSession(
 
     fun sendMouseClick(x: Int, y: Int, button: MouseButton = MouseButton.LEFT) {
         if (closed) return
-        client?.sendMouseMove(x, y)
-        client?.sendMouseButton(button, true)
-        client?.sendMouseButton(button, false)
+        sendMouseMove(x, y)
+        sendMouseButton(button, true)
+        sendMouseButton(button, false)
     }
 
     /** Vertical wheel: positive scrolls up, negative down. */
@@ -268,9 +286,162 @@ class SpiceSession(
             log("E", "Error disconnecting SPICE: ${e.message}")
         }
         client = null
-        synchronized(this) {
-            currentBitmap?.recycle()
-            currentBitmap = null
+        cursorTracker.clear()
+        // #425: never call recycle() on a bitmap Compose's RenderThread may
+        // still be drawing; drop the reference and let NativeAllocationRegistry free it.
+        frameBuffer.clear()
+    }
+}
+
+/**
+ * Reuses one framebuffer bitmap per `(width, height)` across SPICE frame
+ * updates (#607), avoiding per-frame full-screen `Bitmap.createBitmap`
+ * allocations and viewer chrome recompositions while never calling `recycle()`
+ * on bitmaps that Compose may still be drawing (#425).
+ */
+internal class SpiceFrameBuffer<B : Any>(
+    private val allocate: (width: Int, height: Int) -> B,
+    private val writePixels: (B, ByteArray) -> Unit,
+) {
+    private var currentBitmap: B? = null
+    private var currentWidth: Int = 0
+    private var currentHeight: Int = 0
+
+    @Synchronized
+    fun update(frame: FrameData): B {
+        val w = frame.width.toInt()
+        val h = frame.height.toInt()
+        val requiredBytes = w * h * 4
+        require(w > 0 && h > 0 && frame.pixels.size >= requiredBytes) {
+            "Invalid SPICE frame ${w}x${h} (${frame.pixels.size} bytes, need $requiredBytes)"
         }
+        val bmp = if (currentBitmap != null && currentWidth == w && currentHeight == h) {
+            currentBitmap!!
+        } else {
+            val fresh = allocate(w, h)
+            currentBitmap = fresh
+            currentWidth = w
+            currentHeight = h
+            fresh
+        }
+        writePixels(bmp, frame.pixels)
+        return bmp
+    }
+
+    @Synchronized
+    fun get(): B? = currentBitmap
+
+    @Synchronized
+    fun clear() {
+        currentBitmap = null
+        currentWidth = 0
+        currentHeight = 0
+    }
+}
+
+/**
+ * Deduplicates SPICE cursor shape updates across high-rate `SPICE_MSG_CURSOR_MOVE`
+ * callbacks (`spice-client`'s `cursor.rs` invokes `on_cursor` with the full RGBA
+ * shape buffer on every pointer move).
+ *
+ * - Always forwards `(cursor.x, cursor.y)` via [onPosition].
+ * - Only decodes a new bitmap via [decodeShape] when `(width, height, pixels)`
+ *   changes; hotspot-only changes reuse the decoded bitmap and re-emit [onShape].
+ * - Suppresses duplicate [onShape] emissions when neither visibility, bitmap, nor
+ *   hotspot changed, avoiding per-move `Bitmap.createBitmap` allocations,
+ *   `CursorOverlay` `StateFlow` updates, and Compose `asImageBitmap()` texture uploads.
+ * - Re-emits the cached bitmap without re-decoding when a hidden cursor becomes
+ *   visible again with the same shape, and preserves `#598`'s initial `null`
+ *   emission when `CURSOR_INIT(visible = false)` arrives at connect time.
+ */
+internal class SpiceCursorTracker<B : Any>(
+    private val decodeShape: (CursorData, Int, Int) -> B,
+) {
+    private var cachedWidth: Int = 0
+    private var cachedHeight: Int = 0
+    private var cachedPixels: ByteArray? = null
+    private var cachedBitmap: B? = null
+    private var emittedHotX: Int = 0
+    private var emittedHotY: Int = 0
+    private var emittedVisible: Boolean? = null
+
+    @Synchronized
+    fun onCursor(
+        cursor: CursorData,
+        onPosition: ((Int, Int) -> Unit)?,
+        onShape: ((B?, Int, Int) -> Unit)?,
+    ) {
+        onPosition?.invoke(cursor.x, cursor.y)
+        val w = cursor.width.toInt()
+        val h = cursor.height.toInt()
+        if (!cursor.visible || w <= 0 || h <= 0 || cursor.pixels.size < w * h * 4) {
+            if (emittedVisible != false) {
+                emittedVisible = false
+                onShape?.invoke(null, 0, 0)
+            }
+            return
+        }
+
+        val hotX = cursor.hotX.toInt()
+        val hotY = cursor.hotY.toInt()
+        val samePixels = cachedBitmap != null &&
+            w == cachedWidth &&
+            h == cachedHeight &&
+            cachedPixels != null &&
+            cachedPixels.contentEquals(cursor.pixels)
+
+        if (samePixels && emittedVisible == true && hotX == emittedHotX && hotY == emittedHotY) {
+            return
+        }
+
+        val bmp = if (samePixels) {
+            cachedBitmap!!
+        } else {
+            val decoded = decodeShape(cursor, w, h)
+            cachedWidth = w
+            cachedHeight = h
+            cachedPixels = cursor.pixels.copyOf()
+            cachedBitmap = decoded
+            decoded
+        }
+        emittedHotX = hotX
+        emittedHotY = hotY
+        emittedVisible = true
+        onShape?.invoke(bmp, hotX, hotY)
+    }
+
+    @Synchronized
+    fun clear() {
+        cachedWidth = 0
+        cachedHeight = 0
+        cachedPixels = null
+        cachedBitmap = null
+        emittedHotX = 0
+        emittedHotY = 0
+        emittedVisible = null
+    }
+}
+
+/**
+ * Encode a PC XT/AT Set-1 scancode (with `0xE000` marking extended keys, matching
+ * `RdpScreen` / `RdpKeyMapping`) into the 32-bit little-endian `code` word expected
+ * by `SPICE_MSGC_INPUTS_KEY_DOWN` / `SPICE_MSGC_INPUTS_KEY_UP` (`spice-server`
+ * `inputs-channel.cpp` + `spice-gtk` `spice_make_scancode`):
+ *
+ * - `spice-server` pushes `code` byte-by-byte (`(code >> (i * 8)) & 0xff`, stopping
+ *   at `0x00`) straight into `kbd_push_scan` for BOTH `KEY_DOWN` and `KEY_UP`, so
+ *   key releases MUST carry the PS/2 `0x80` break bit (`base | 0x80`). Sending the
+ *   unmodified make code on `KEY_UP` pressed every key a second time and left keys
+ *   and `Shift` stuck down in the guest (#606).
+ * - Extended `0xE0`-prefixed keys must push `0xE0` first (bits 0..7) and
+ *   `base` / `base | 0x80` second (bits 8..15), i.e. `0xE0 | (byte1 << 8)`.
+ */
+internal fun spiceWireScancode(scancode: Int, pressed: Boolean): UInt {
+    val base = scancode and 0x7F
+    val scanByte = if (pressed) base else (base or 0x80)
+    return if ((scancode and 0xFF00) == 0xE000) {
+        (0xE0 or (scanByte shl 8)).toUInt()
+    } else {
+        scanByte.toUInt()
     }
 }

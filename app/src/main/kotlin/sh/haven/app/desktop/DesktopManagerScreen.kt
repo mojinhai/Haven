@@ -85,6 +85,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 import sh.haven.core.local.DesktopManager
+import sh.haven.core.local.ProotDns
 import sh.haven.core.local.ProotDnsMode
 import sh.haven.core.local.ProotManager
 import sh.haven.core.local.ProotRouting
@@ -1504,12 +1505,19 @@ private fun GuestDnsRow(
         }
     }
     if (mode == ProotDnsMode.CUSTOM) {
+        val hasInvalidTokens = remember(servers) { ProotDns.invalidTokens(servers).isNotEmpty() }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = servers,
             onValueChange = onServersChange,
             label = { Text(stringResource(AppR.string.app_desktop_dns_custom_label)) },
             placeholder = { Text(stringResource(AppR.string.app_desktop_dns_custom_hint)) },
+            isError = hasInvalidTokens,
+            supportingText = if (hasInvalidTokens) {
+                { Text(stringResource(AppR.string.app_desktop_dns_custom_err_invalid)) }
+            } else {
+                null
+            },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -1703,6 +1711,13 @@ private fun GuestRoutingRow(
     if (config.mode != ProotRoutingMode.DIRECT) {
         Spacer(Modifier.height(8.dp))
         BindingToggleRow(
+            title = stringResource(AppR.string.app_desktop_routing_block_direct_title),
+            description = stringResource(AppR.string.app_desktop_routing_block_direct_description),
+            checked = config.blockDirectTraffic,
+            onCheckedChange = { onConfigChange(config.copy(blockDirectTraffic = it)) },
+        )
+        Spacer(Modifier.height(8.dp))
+        BindingToggleRow(
             title = stringResource(AppR.string.app_desktop_routing_proxychains_title),
             description = stringResource(AppR.string.app_desktop_routing_proxychains_description),
             checked = config.useProxychains,
@@ -1737,13 +1752,41 @@ private fun routingValidationErrorText(error: ProotRouting.ValidationError): Str
  */
 @Composable
 private fun GuestUserRow(
+    distroId: String,
+    distroLabel: String,
     username: String,
+    fallbackUsername: String,
+    hasOverride: Boolean,
     onUsernameChange: (String) -> Unit,
+    onReset: () -> Unit,
 ) {
-    Text(
-        stringResource(AppR.string.app_desktop_guest_user_title),
-        style = MaterialTheme.typography.titleSmall,
-    )
+    var draft by remember(distroId) { mutableStateOf(username) }
+    val trimmed = draft.trim()
+    val isInvalid = trimmed.isNotEmpty() &&
+        !trimmed.equals("root", ignoreCase = true) &&
+        ProotManager.sanitizeGuestUsername(trimmed).isEmpty()
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "${stringResource(AppR.string.app_desktop_guest_user_title)} ($distroLabel)",
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f),
+        )
+        if (hasOverride) {
+            TextButton(
+                onClick = {
+                    val nextDraft = fallbackUsername
+                    onReset()
+                    draft = nextDraft
+                },
+            ) {
+                Text(stringResource(AppR.string.app_desktop_routing_reset))
+            }
+        }
+    }
     Spacer(Modifier.height(2.dp))
     Text(
         stringResource(AppR.string.app_desktop_guest_user_description),
@@ -1752,10 +1795,21 @@ private fun GuestUserRow(
     )
     Spacer(Modifier.height(8.dp))
     OutlinedTextField(
-        value = username,
-        onValueChange = onUsernameChange,
+        value = draft,
+        onValueChange = { updated ->
+            draft = updated
+            if (updated.isBlank() || updated.trim().equals("root", ignoreCase = true)) {
+                onUsernameChange("")
+            } else {
+                val clean = ProotManager.sanitizeGuestUsername(updated)
+                if (clean.isNotEmpty()) {
+                    onUsernameChange(clean)
+                }
+            }
+        },
         label = { Text(stringResource(AppR.string.app_desktop_guest_user_label)) },
         placeholder = { Text(stringResource(AppR.string.app_desktop_guest_user_hint)) },
+        isError = isInvalid,
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
@@ -2494,9 +2548,29 @@ private fun DesktopManagerSection(
                         onReset = { viewModel.clearRoutingConfig(activeDistroId) },
                     )
                     Spacer(Modifier.height(8.dp))
+                    val guestUserRev by viewModel.guestUserRev.collectAsState()
+                    val activeGuestUsername = remember(activeDistroId, guestUserRev, guestUsername) {
+                        viewModel.guestUsernameFor(activeDistroId)
+                    }
+                    val hasGuestUserOverride = remember(activeDistroId, guestUserRev) {
+                        viewModel.hasGuestUsernameOverride(activeDistroId)
+                    }
                     GuestUserRow(
-                        username = guestUsername,
-                        onUsernameChange = onSetGuestUsername,
+                        distroId = activeDistroId,
+                        distroLabel = activeDistroLabel,
+                        username = activeGuestUsername,
+                        fallbackUsername = if (hasGuestUserOverride) guestUsername else "",
+                        hasOverride = hasGuestUserOverride || activeGuestUsername.isNotEmpty(),
+                        onUsernameChange = { updated ->
+                            viewModel.setGuestUsernameFor(activeDistroId, updated)
+                        },
+                        onReset = {
+                            if (hasGuestUserOverride) {
+                                viewModel.clearGuestUsernameFor(activeDistroId)
+                            } else {
+                                onSetGuestUsername("")
+                            }
+                        },
                     )
                     Spacer(Modifier.height(8.dp))
                     BindingToggleRow(

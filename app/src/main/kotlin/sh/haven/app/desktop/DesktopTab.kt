@@ -98,6 +98,8 @@ sealed class DesktopTab {
         /** Lease tying this tab to its SSH tunnel; closing it releases the tunnel. */
         val tunnelLease: SshSessionManager.TunnelLease? = null,
         override val profileId: String? = null,
+        /** #606: resolved Windows KLID for character-to-scancode synthesis on this tab. */
+        val keyboardLayoutKlid: UInt = sh.haven.core.rdp.keyboardLayoutKlid(),
     ) : DesktopTab() {
         override val connected: StateFlow<Boolean> get() = _connected
         override val frame: StateFlow<Bitmap?> get() = _frame
@@ -128,6 +130,8 @@ sealed class DesktopTab {
         /** Loopback TCP relay forwarding SPICE channel connections through a WireGuard/Tailscale/proxy factory. */
         val tunnelRelay: java.io.Closeable? = null,
         override val profileId: String? = null,
+        /** #606: resolved Windows KLID matching the guest VM's configured keyboard layout. */
+        val keyboardLayoutKlid: UInt = sh.haven.core.rdp.keyboardLayoutKlid(),
     ) : DesktopTab() {
         override val connected: StateFlow<Boolean> get() = _connected
         override val frame: StateFlow<Bitmap?> get() = _frame
@@ -135,6 +139,9 @@ sealed class DesktopTab {
         override val remoteDesktop: RemoteDesktopSession = SpiceDesktopSession(session)
         val cursor: StateFlow<CursorOverlay?> get() = _cursor
         val pointerPos: StateFlow<Pair<Int, Int>> get() = _pointerPos
+
+        /** #607: [frame] reuses one bitmap per surface size; draw scopes observe [frameSeq]. */
+        val frameSeq: StateFlow<Long> get() = session.frameSeq
     }
 
     data class Glkvm(

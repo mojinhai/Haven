@@ -1209,7 +1209,7 @@ class ConnectionsViewModel @Inject constructor(
     val navigateToWayland: StateFlow<Boolean> = _navigateToWayland.asStateFlow()
 
     /** Emitted to navigate to RDP screen with connection params. */
-    data class RdpNavigation(val host: String, val port: Int, val username: String, val password: String, val domain: String, val sshForward: Boolean = false, val sshSessionId: String? = null, val profileId: String? = null, val useNla: Boolean = true, val colorDepth: Int = 32, val portKnockSequence: String? = null, val portKnockDelayMs: Int = 100)
+    data class RdpNavigation(val host: String, val port: Int, val username: String, val password: String, val domain: String, val sshForward: Boolean = false, val sshSessionId: String? = null, val profileId: String? = null, val useNla: Boolean = true, val colorDepth: Int = 32, val portKnockSequence: String? = null, val portKnockDelayMs: Int = 100, val keyboardLayout: String? = null)
     private val _navigateToRdp = MutableStateFlow<RdpNavigation?>(null)
     val navigateToRdp: StateFlow<RdpNavigation?> = _navigateToRdp.asStateFlow()
 
@@ -1221,6 +1221,7 @@ class ConnectionsViewModel @Inject constructor(
         val sshForward: Boolean = false,
         val sshSessionId: String? = null,
         val profileId: String? = null,
+        val keyboardLayout: String? = null,
     )
     private val _navigateToSpice = MutableStateFlow<SpiceNavigation?>(null)
     val navigateToSpice: StateFlow<SpiceNavigation?> = _navigateToSpice.asStateFlow()
@@ -2297,12 +2298,35 @@ class ConnectionsViewModel @Inject constructor(
 
     fun deleteConnection(id: String) {
         viewModelScope.launch {
+            val profile = repository.getById(id)
             sessionManagerRegistry.disconnectProfile(id)
             sshSessionManager.teardownTunnelDependent(id)
             desktopSessionRegistry.closeHandle(id)?.invoke()
             localSessionManager.desktopManager.stopAll()
             updateServiceNotification()
             repository.delete(id)
+            // Symmetric cleanup (#839): drop the underlying rclone.conf section
+            // when deleting the last RCLONE profile pointing at it so re-importing
+            // later does not see an orphaned remote in config/listremotes.
+            val remoteName = profile
+                ?.takeIf { it.connectionType == "RCLONE" }
+                ?.rcloneRemoteName
+                ?.takeIf { it.isNotBlank() }
+            if (remoteName != null) {
+                val stillShared = repository.getAll().any {
+                    it.id != id && it.connectionType == "RCLONE" && it.rcloneRemoteName == remoteName
+                }
+                if (!stillShared) {
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            rcloneClient.initialize()
+                            if (remoteName in rcloneClient.listRemotes()) {
+                                rcloneClient.deleteRemote(remoteName)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2835,6 +2859,7 @@ class ConnectionsViewModel @Inject constructor(
                         colorDepth = profile.rdpColorDepth,
                         portKnockSequence = profile.portKnockSequence,
                         portKnockDelayMs = profile.portKnockDelayMs,
+                        keyboardLayout = profile.keyboardLayout,
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to connect SSH tunnel host for RDP", e)
@@ -2849,7 +2874,7 @@ class ConnectionsViewModel @Inject constructor(
                     _connectingProfileId.value = null
                 }
             } else {
-                _navigateToRdp.value = RdpNavigation(host, port, username, rdpPassword, domain, profile.rdpSshForward, profileId = profile.id, useNla = profile.rdpUseNla, colorDepth = profile.rdpColorDepth, portKnockSequence = profile.portKnockSequence, portKnockDelayMs = profile.portKnockDelayMs)
+                _navigateToRdp.value = RdpNavigation(host, port, username, rdpPassword, domain, profile.rdpSshForward, profileId = profile.id, useNla = profile.rdpUseNla, colorDepth = profile.rdpColorDepth, portKnockSequence = profile.portKnockSequence, portKnockDelayMs = profile.portKnockDelayMs, keyboardLayout = profile.keyboardLayout)
             }
         }
     }
@@ -2878,6 +2903,7 @@ class ConnectionsViewModel @Inject constructor(
                         sshForward = true,
                         sshSessionId = sshSessionId,
                         profileId = profile.id,
+                        keyboardLayout = profile.keyboardLayout,
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to connect SSH tunnel host for SPICE", e)
@@ -2890,6 +2916,7 @@ class ConnectionsViewModel @Inject constructor(
                     host, port, password,
                     sshForward = profile.spiceSshForward,
                     profileId = profile.id,
+                    keyboardLayout = profile.keyboardLayout,
                 )
             }
         }
@@ -3835,27 +3862,54 @@ class ConnectionsViewModel @Inject constructor(
             _connectingProfileId.value = profile.id
             _error.value = null
 
-            // If proot binary is available but rootfs isn't installed, download it first
-            val prootManager = localSessionManager.prootManager
-            if (prootManager.prootBinary != null && !prootManager.isRootfsInstalled) {
-                Log.d(TAG, "PRoot available but rootfs not installed — downloading...")
-                prootManager.installRootfs()
-                if (prootManager.state.value is sh.haven.core.local.ProotManager.SetupState.Error) {
-                    val err = prootManager.state.value as sh.haven.core.local.ProotManager.SetupState.Error
-                    Log.w(TAG, "Rootfs install failed: ${err.message}, falling back to plain shell")
+            val shellMode = profile.resolvedLocalShellMode
+            if (shellMode == ConnectionProfile.LocalShellMode.PROOT) {
+                // If proot binary is available but rootfs isn't installed, download it first
+                val prootManager = localSessionManager.prootManager
+                if (prootManager.prootBinary != null && !prootManager.isRootfsInstalled) {
+                    Log.d(TAG, "PRoot available but rootfs not installed — downloading...")
+                    prootManager.installRootfs()
+                    if (prootManager.state.value is sh.haven.core.local.ProotManager.SetupState.Error) {
+                        val err = prootManager.state.value as sh.haven.core.local.ProotManager.SetupState.Error
+                        Log.w(TAG, "Rootfs install failed: ${err.message}, falling back to plain shell")
+                    }
                 }
             }
 
-            val sessionId = localSessionManager.registerSession(profile.id, profile.label, profile.useAndroidShell, profile.prootDistroId)
+            if (shellMode == ConnectionProfile.LocalShellMode.SHIZUKU) {
+                try {
+                    localSessionManager.ensureShizukuReady()
+                } catch (e: Exception) {
+                    Log.e(TAG, "connectLocal Shizuku readiness failed: ${e.message}", e)
+                    if (!profile.ephemeral) {
+                        connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.FAILED, details = e.message)
+                    }
+                    _error.value = e.message ?: "Shizuku shell failed"
+                    _connectingProfileId.value = null
+                    return@launch
+                }
+            }
+
+            val sessionId = localSessionManager.registerSession(
+                profileId = profile.id,
+                label = profile.label,
+                useAndroidShell = shellMode == ConnectionProfile.LocalShellMode.ANDROID_SHELL,
+                prootDistroId = profile.prootDistroId,
+                localShellMode = shellMode,
+            )
             try {
                 localSessionManager.connectSession(sessionId)
-                repository.markConnected(profile.id)
-                connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.CONNECTED)
+                if (!profile.ephemeral) {
+                    repository.markConnected(profile.id)
+                    connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.CONNECTED)
+                }
                 startForegroundServiceIfNeeded()
                 _navigateToTerminal.value = profile.id
             } catch (e: Exception) {
                 Log.e(TAG, "connectLocal failed: ${e.message}", e)
-                connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.FAILED, details = e.message)
+                if (!profile.ephemeral) {
+                    connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.FAILED, details = e.message)
+                }
                 localSessionManager.updateStatus(sessionId, LocalSessionManager.SessionState.Status.ERROR)
                 localSessionManager.removeSession(sessionId)
                 _error.value = e.message ?: "Local terminal failed"
@@ -6915,6 +6969,17 @@ class ConnectionsViewModel @Inject constructor(
     }
 
     fun parseQuickConnect(input: String): ConnectionProfile? {
+        val trimmed = input.trim()
+        if (trimmed.equals("shizuku", ignoreCase = true) || trimmed.equals("shizuku://", ignoreCase = true)) {
+            return ConnectionProfile(
+                label = "Shizuku Shell",
+                host = "localhost",
+                port = 0,
+                username = "",
+                connectionType = "LOCAL",
+                localShellMode = ConnectionProfile.LocalShellMode.SHIZUKU.name,
+            )
+        }
         val config = ConnectionConfig.parseQuickConnect(input) ?: return null
         return ConnectionProfile(
             label = "${config.username}@${config.host}",
@@ -6976,8 +7041,9 @@ class ConnectionsViewModel @Inject constructor(
             return
         }
 
+        val shellMode = profile.resolvedLocalShellMode
         val prootManager = localSessionManager.prootManager
-        if (!profile.useAndroidShell) {
+        if (shellMode == ConnectionProfile.LocalShellMode.PROOT) {
             profile.prootDistroId?.takeIf { it.isNotBlank() }?.let { distroId ->
                 if (prootManager.activeDistroId != distroId) {
                     prootManager.setActiveDistroId(distroId)
@@ -6986,13 +7052,21 @@ class ConnectionsViewModel @Inject constructor(
             if (prootManager.prootBinary != null && !prootManager.isRootfsInstalled) {
                 prootManager.installRootfs()
             }
+        } else if (shellMode == ConnectionProfile.LocalShellMode.SHIZUKU) {
+            try {
+                localSessionManager.ensureShizukuReady()
+            } catch (e: Exception) {
+                connectionLogRepository.logEvent(profile.id, ConnectionLog.Status.FAILED, details = e.message)
+                throw e
+            }
         }
 
         val sessionId = localSessionManager.registerSession(
-            profile.id,
-            profile.label,
-            profile.useAndroidShell,
-            profile.prootDistroId,
+            profileId = profile.id,
+            label = profile.label,
+            useAndroidShell = shellMode == ConnectionProfile.LocalShellMode.ANDROID_SHELL,
+            prootDistroId = profile.prootDistroId,
+            localShellMode = shellMode,
         )
         try {
             localSessionManager.connectSession(sessionId)

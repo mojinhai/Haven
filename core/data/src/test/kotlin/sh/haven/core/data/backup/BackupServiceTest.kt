@@ -209,6 +209,26 @@ class BackupServiceTest {
         assertEquals(67890L, repo.lastViewedAgentAuditTimestamp.first())
     }
 
+    @Test
+    fun `desktop mouse gesture preferences survive backup export and import (#836)`() = runTest {
+        val repo = UserPreferencesRepository(mockk(relaxed = true), dataStore)
+        assertEquals("RIGHT_CLICK", repo.desktopLongPressAction.first())
+        assertEquals("MIDDLE_CLICK", repo.desktopTwoFingerTapAction.first())
+        assertEquals("NONE", repo.desktopThreeFingerTapAction.first())
+
+        repo.setDesktopLongPressAction("NONE")
+        repo.setDesktopTwoFingerTapAction("RIGHT_CLICK")
+        repo.setDesktopThreeFingerTapAction("MIDDLE_CLICK")
+
+        val encrypted = service.export("pw")
+        dataStore.edit { it.clear() }
+        service.import(encrypted, "pw")
+
+        assertEquals("NONE", repo.desktopLongPressAction.first())
+        assertEquals("RIGHT_CLICK", repo.desktopTwoFingerTapAction.first())
+        assertEquals("MIDDLE_CLICK", repo.desktopThreeFingerTapAction.first())
+    }
+
     @Test(expected = Exception::class)
     fun `import with wrong password throws`() = runTest {
         coEvery { connectionRepository.getAll() } returns emptyList()
@@ -297,6 +317,7 @@ class BackupServiceTest {
             glkvmPort = 443,
             glkvmPassword = "glkvmpass",
             glkvmTargetLayout = "uk",
+            keyboardLayout = "es-ES",
             glkvmSshForward = true,
             glkvmSshProfileId = "ssh-tunnel-1",
             emailProvider = "imap",
@@ -344,6 +365,7 @@ class BackupServiceTest {
         assertEquals(443, imported.glkvmPort)
         assertEquals("glkvmpass", imported.glkvmPassword)
         assertEquals("uk", imported.glkvmTargetLayout)
+        assertEquals("es-ES", imported.keyboardLayout)
         assertEquals(true, imported.glkvmSshForward)
         assertEquals("ssh-tunnel-1", imported.glkvmSshProfileId)
         assertEquals("imap", imported.emailProvider)
@@ -718,6 +740,7 @@ class BackupServiceTest {
             rcloneRemoteName = "drive",
             rcloneProvider = "drive",
             useAndroidShell = true,
+            localShellMode = "SHIZUKU",
             forwardAgent = true,
             reticulumNetworkName = "mynet",
             reticulumPassphrase = "secret",
@@ -750,6 +773,8 @@ class BackupServiceTest {
         assertEquals("drive", imported.rcloneRemoteName)
         assertEquals("drive", imported.rcloneProvider)
         assertEquals(true, imported.useAndroidShell)
+        assertEquals("SHIZUKU", imported.localShellMode)
+        assertEquals(ConnectionProfile.LocalShellMode.SHIZUKU, imported.resolvedLocalShellMode)
         assertEquals(true, imported.forwardAgent)
         assertEquals("mynet", imported.reticulumNetworkName)
         assertEquals("secret", imported.reticulumPassphrase)
@@ -1184,6 +1209,7 @@ class BackupServiceTest {
             spicePassword = "spice-secret",
             spiceSshForward = true,
             spiceSshProfileId = "spice-ssh-99",
+            keyboardLayout = "es-ES",
             glkvmPort = 8443,
             glkvmPassword = "glkvm-secret",
             glkvmTargetLayout = "uk",
@@ -1222,6 +1248,7 @@ class BackupServiceTest {
             aiRouteType = "SSH",
             aiRouteProfileId = "ssh-ai-99",
             useAndroidShell = true,
+            localShellMode = "SHIZUKU",
             prootDistroId = "debian-trixie",
             moshServerCommand = "/usr/local/bin/mosh-server new -s",
             forwardAgent = true,
@@ -1263,7 +1290,7 @@ class BackupServiceTest {
         val defaults = ConnectionProfile(id = "default-id", label = "Default", host = "default.host", username = "default-user")
         val persistedFields = ConnectionProfile::class.java.declaredFields
             .filter { !java.lang.reflect.Modifier.isStatic(it.modifiers) && !it.isSynthetic && it.name != "ephemeral" }
-        assertEquals(114, persistedFields.size)
+        assertEquals(116, persistedFields.size)
         for (field in persistedFields) {
             field.isAccessible = true
             org.junit.Assert.assertNotEquals(

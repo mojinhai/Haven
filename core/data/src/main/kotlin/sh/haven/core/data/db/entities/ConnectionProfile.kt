@@ -119,6 +119,14 @@ data class ConnectionProfile @Ignore constructor(
     val spicePassword: String? = null,
     val spiceSshForward: Boolean = false,
     val spiceSshProfileId: String? = null,
+    /**
+     * #606: optional per-profile keyboard layout override (BCP-47 tag such as
+     * `"es-ES"`, `"en-US"`, `"de-DE"`, `"fr-FR"`). Null uses the device locale.
+     * On RDP this sets both the Client Core Data KLID announcement and client-side
+     * character-to-scancode synthesis; on SPICE (which has no layout announcement
+     * PDU) this maps typed characters to the guest VM's configured keyboard layout.
+     */
+    val keyboardLayout: String? = null,
     // GLKVM (PiKVM kvmd fork, #GLKVM). Auth is web-UI user + password; TLS is
     // TOFU-pinned via the shared known_tls_certs store so no cert column exists.
     val glkvmPort: Int? = null,
@@ -230,12 +238,18 @@ data class ConnectionProfile @Ignore constructor(
     /** Use native Android shell instead of PRoot for local connections. */
     val useAndroidShell: Boolean = false,
     /**
+     * Explicit shell backend for `LOCAL` profiles (#837): `"PROOT"`,
+     * `"ANDROID_SHELL"`, or `"SHIZUKU"`. Null on pre-#837 rows, which fall
+     * back to [useAndroidShell] via [resolvedLocalShellMode].
+     */
+    val localShellMode: String? = null,
+    /**
      * For LOCAL profiles: open the proot shell directly in this distro
      * (e.g. `debian-bookworm`, `alpine-3.21`) instead of the global active
      * distro. Null = follow the active distro (the original behaviour, so
-     * existing profiles are unchanged). Ignored when [useAndroidShell] is
-     * true. Each distro has its own rootfs, so distinct profiles can run
-     * different OSes side by side.
+     * existing profiles are unchanged). Ignored unless
+     * [resolvedLocalShellMode] is [LocalShellMode.PROOT]. Each distro has its
+     * own rootfs, so distinct profiles can run different OSes side by side.
      */
     val prootDistroId: String? = null,
     /** Custom mosh-server command (overrides the default `mosh-server new -s -c 256 -l LANG=en_US.UTF-8`). */
@@ -429,13 +443,13 @@ data class ConnectionProfile @Ignore constructor(
      * lastSessionName). Kept on the [@Ignore]-annotated primary constructor
      * so Kotlin's generated [copy] preserves it across credential encryption,
      * identity substitution, and host rediscovery, while Room uses the
-     * 114-column secondary constructor below with zero schema change.
+     * 116-column secondary constructor below with zero schema change.
      */
     @field:Ignore
     @get:Ignore
     var ephemeral: Boolean = false,
 ) {
-    /** Room persistence constructor matching the 114 database columns (leaves [ephemeral] false). */
+    /** Room persistence constructor matching the 116 database columns (leaves [ephemeral] false). */
     constructor(
         id: String,
         label: String,
@@ -480,6 +494,7 @@ data class ConnectionProfile @Ignore constructor(
         spicePassword: String?,
         spiceSshForward: Boolean,
         spiceSshProfileId: String?,
+        keyboardLayout: String?,
         glkvmPort: Int?,
         glkvmPassword: String?,
         glkvmTargetLayout: String?,
@@ -518,6 +533,7 @@ data class ConnectionProfile @Ignore constructor(
         aiRouteType: String?,
         aiRouteProfileId: String?,
         useAndroidShell: Boolean,
+        localShellMode: String?,
         prootDistroId: String?,
         moshServerCommand: String?,
         forwardAgent: Boolean,
@@ -595,6 +611,7 @@ data class ConnectionProfile @Ignore constructor(
         spicePassword = spicePassword,
         spiceSshForward = spiceSshForward,
         spiceSshProfileId = spiceSshProfileId,
+        keyboardLayout = keyboardLayout,
         glkvmPort = glkvmPort,
         glkvmPassword = glkvmPassword,
         glkvmTargetLayout = glkvmTargetLayout,
@@ -633,6 +650,7 @@ data class ConnectionProfile @Ignore constructor(
         aiRouteType = aiRouteType,
         aiRouteProfileId = aiRouteProfileId,
         useAndroidShell = useAndroidShell,
+        localShellMode = localShellMode,
         prootDistroId = prootDistroId,
         moshServerCommand = moshServerCommand,
         forwardAgent = forwardAgent,
@@ -822,7 +840,29 @@ data class ConnectionProfile @Ignore constructor(
     /** GLKVM (PiKVM-style KVM over the kvmd HTTPS API) — desktop viewer tab. */
     val isGlkvm: Boolean get() = connectionType == "GLKVM"
     val isSmb: Boolean get() = connectionType == "SMB"
+    enum class LocalShellMode {
+        PROOT,
+        ANDROID_SHELL,
+        SHIZUKU;
+
+        companion object {
+            fun fromRaw(raw: String?, legacyUseAndroidShell: Boolean = false): LocalShellMode =
+                when (raw) {
+                    SHIZUKU.name -> SHIZUKU
+                    ANDROID_SHELL.name -> ANDROID_SHELL
+                    PROOT.name -> PROOT
+                    else -> if (legacyUseAndroidShell) ANDROID_SHELL else PROOT
+                }
+        }
+    }
+
+    val resolvedLocalShellMode: LocalShellMode
+        get() = LocalShellMode.fromRaw(localShellMode, useAndroidShell)
+
     val isLocal: Boolean get() = connectionType == "LOCAL"
+    val isProotShell: Boolean get() = isLocal && resolvedLocalShellMode == LocalShellMode.PROOT
+    val isAndroidShell: Boolean get() = isLocal && resolvedLocalShellMode == LocalShellMode.ANDROID_SHELL
+    val isShizukuShell: Boolean get() = isLocal && resolvedLocalShellMode == LocalShellMode.SHIZUKU
 
     // UML guest (#uml): a whole Linux kernel running as the app's own process.
     // Fields are unused (the kernel args are fixed in UmlGuestManager), so no

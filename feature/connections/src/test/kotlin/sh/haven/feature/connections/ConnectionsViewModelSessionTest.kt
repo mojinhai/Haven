@@ -89,6 +89,7 @@ class ConnectionsViewModelSessionTest {
     private lateinit var localSessionManager: LocalSessionManager
     private lateinit var mailSessionManager: MailSessionManager
     private lateinit var rcloneSessionManager: sh.haven.core.rclone.RcloneSessionManager
+    private lateinit var rcloneClient: sh.haven.core.rclone.RcloneClient
     private lateinit var openAiSessionManager: sh.haven.core.openai.OpenAiSessionManager
     private val openAiSessions = MutableStateFlow<Map<String, sh.haven.core.openai.OpenAiSessionManager.SessionState>>(emptyMap())
     private lateinit var prootManager: ProotManager
@@ -203,6 +204,7 @@ class ConnectionsViewModelSessionTest {
             every { sessionCommandOverride } returns flowOf(null)
         }
 
+        rcloneClient = mockk(relaxed = true)
         viewModel = buildViewModel()
     }
 
@@ -237,7 +239,7 @@ class ConnectionsViewModelSessionTest {
             reticulumForwardServer = mockk(relaxed = true),
             smbSessionManager = smbSessionManager,
             rcloneSessionManager = rcloneSessionManager,
-            rcloneClient = mockk(relaxed = true),
+            rcloneClient = rcloneClient,
             fidoAuthenticator = mockk(relaxed = true),
             keystoreSshKeySigner = mockk(relaxed = true),
             localSessionManager = localSessionManager,
@@ -386,6 +388,52 @@ class ConnectionsViewModelSessionTest {
 
         verify { desktopManager.stopAll() }
         coVerify { repository.delete("profile1") }
+    }
+
+    @Test
+    fun `deleteConnection removes unshared rclone remote from rclone conf`() = runTest {
+        val rcloneProfile = ConnectionProfile(
+            id = "rc1",
+            label = "My Drive",
+            host = "",
+            username = "",
+            connectionType = "RCLONE",
+            rcloneRemoteName = "gdrive",
+            rcloneProvider = "drive",
+        )
+        coEvery { repository.getById("rc1") } returns rcloneProfile
+        coEvery { repository.getAll() } returns emptyList()
+        every { rcloneClient.listRemotes() } returns listOf("gdrive", "other")
+
+        viewModel.deleteConnection("rc1")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify { repository.delete("rc1") }
+        verify(timeout = 2_000) { rcloneClient.initialize() }
+        verify(timeout = 2_000) { rcloneClient.deleteRemote("gdrive") }
+    }
+
+    @Test
+    fun `deleteConnection preserves rclone remote when shared by another profile`() = runTest {
+        val rc1 = ConnectionProfile(
+            id = "rc1",
+            label = "Drive 1",
+            host = "",
+            username = "",
+            connectionType = "RCLONE",
+            rcloneRemoteName = "gdrive",
+            rcloneProvider = "drive",
+        )
+        val rc2 = rc1.copy(id = "rc2", label = "Drive 2")
+        coEvery { repository.getById("rc1") } returns rc1
+        coEvery { repository.getAll() } returns listOf(rc2)
+        every { rcloneClient.listRemotes() } returns listOf("gdrive")
+
+        viewModel.deleteConnection("rc1")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify { repository.delete("rc1") }
+        verify(exactly = 0) { rcloneClient.deleteRemote("gdrive") }
     }
 
     private fun jumpProfile(authMethods: String) = ConnectionProfile(
@@ -1304,13 +1352,30 @@ class ConnectionsViewModelSessionTest {
         val rdp = ConnectionProfile(
             id = "eph-3", label = "desk", host = "desk.example.invalid",
             username = "", connectionType = "RDP", rdpUsername = "u",
+            keyboardLayout = "es-ES",
         ).also { it.ephemeral = true }
         viewModel.connectEphemeral(rdp)
         testDispatcher.scheduler.advanceUntilIdle()
 
         assertNotNull(viewModel.navigateToRdp.value)
         assertEquals("desk.example.invalid", viewModel.navigateToRdp.value!!.host)
+        assertEquals("es-ES", viewModel.navigateToRdp.value!!.keyboardLayout)
         coVerify(exactly = 0) { repository.save(any()) }
+    }
+
+    @Test
+    fun `connecting a SPICE profile forwards its keyboardLayout to SpiceNavigation (#606)`() = runTest {
+        val spice = ConnectionProfile(
+            id = "spice-1", label = "Debian 13", host = "192.168.122.50",
+            port = 5900, username = "", connectionType = "SPICE",
+            spicePort = 5900, keyboardLayout = "es-ES",
+        )
+        viewModel.connect(spice, "")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertNotNull(viewModel.navigateToSpice.value)
+        assertEquals("192.168.122.50", viewModel.navigateToSpice.value!!.host)
+        assertEquals("es-ES", viewModel.navigateToSpice.value!!.keyboardLayout)
     }
 
     @Test
@@ -1616,7 +1681,13 @@ class ConnectionsViewModelSessionTest {
         every { sshKeyRepository.observeAll() } returns flowOf(listOf(fakeKey))
         every { localSessionManager.getSessionsForProfile("local-android") } returns emptyList()
         every {
-            localSessionManager.registerSession("local-android", "Android Shell", true, "debian-trixie")
+            localSessionManager.registerSession(
+                profileId = "local-android",
+                label = "Android Shell",
+                useAndroidShell = true,
+                prootDistroId = "debian-trixie",
+                localShellMode = ConnectionProfile.LocalShellMode.ANDROID_SHELL,
+            )
         } returns "local-sess-1"
 
         val vm = buildViewModel()
@@ -1630,12 +1701,93 @@ class ConnectionsViewModelSessionTest {
         testDispatcher.scheduler.advanceUntilIdle()
 
         io.mockk.verify(exactly = 1) {
-            localSessionManager.registerSession("local-android", "Android Shell", true, "debian-trixie")
+            localSessionManager.registerSession(
+                profileId = "local-android",
+                label = "Android Shell",
+                useAndroidShell = true,
+                prootDistroId = "debian-trixie",
+                localShellMode = ConnectionProfile.LocalShellMode.ANDROID_SHELL,
+            )
         }
         io.mockk.verify(exactly = 0) {
             sshSessionManager.registerSession("openai-1", any(), any())
         }
         collectJob.cancel()
+    }
+
+    @Test
+    fun `shizuku local profile verifies Shizuku readiness and registers SHIZUKU session without installing proot`() = runTest {
+        val shizukuProfile = ConnectionProfile(
+            id = "local-shizuku",
+            label = "Shizuku Shell",
+            host = "localhost",
+            username = "",
+            connectionType = "LOCAL",
+            localShellMode = "SHIZUKU",
+        )
+        io.mockk.coEvery { localSessionManager.ensureShizukuReady() } returns Unit
+        every { localSessionManager.getSessionsForProfile("local-shizuku") } returns emptyList()
+        every {
+            localSessionManager.registerSession(
+                profileId = "local-shizuku",
+                label = "Shizuku Shell",
+                useAndroidShell = false,
+                prootDistroId = null,
+                localShellMode = ConnectionProfile.LocalShellMode.SHIZUKU,
+            )
+        } returns "shizuku-sess-1"
+
+        viewModel.connect(shizukuProfile, "")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        coVerify(exactly = 1) { localSessionManager.ensureShizukuReady() }
+        io.mockk.verify(exactly = 1) {
+            localSessionManager.registerSession(
+                profileId = "local-shizuku",
+                label = "Shizuku Shell",
+                useAndroidShell = false,
+                prootDistroId = null,
+                localShellMode = ConnectionProfile.LocalShellMode.SHIZUKU,
+            )
+        }
+        assertEquals("local-shizuku", viewModel.navigateToTerminal.value)
+    }
+
+    @Test
+    fun `shizuku local profile surfaces error without registering session when Shizuku is unavailable`() = runTest {
+        val shizukuProfile = ConnectionProfile(
+            id = "local-shizuku-down",
+            label = "Shizuku Shell",
+            host = "localhost",
+            username = "",
+            connectionType = "LOCAL",
+            localShellMode = "SHIZUKU",
+        )
+        io.mockk.coEvery { localSessionManager.ensureShizukuReady() } throws
+            sh.haven.core.local.ShizukuUnavailableException("Shizuku service is not running.")
+        every { localSessionManager.getSessionsForProfile("local-shizuku-down") } returns emptyList()
+
+        viewModel.connect(shizukuProfile, "")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("Shizuku service is not running.", viewModel.error.value)
+        org.junit.Assert.assertNull(viewModel.navigateToTerminal.value)
+        io.mockk.verify(exactly = 0) {
+            localSessionManager.registerSession(any(), any(), any(), any(), any(), any())
+        }
+    }
+
+    @Test
+    fun `parseQuickConnect recognizes shizuku and shizuku scheme`() {
+        val plain = viewModel.parseQuickConnect("shizuku")
+        org.junit.Assert.assertNotNull(plain)
+        assertEquals("LOCAL", plain!!.connectionType)
+        assertEquals(ConnectionProfile.LocalShellMode.SHIZUKU, plain.resolvedLocalShellMode)
+
+        val scheme = viewModel.parseQuickConnect("  shizuku:// ")
+        org.junit.Assert.assertNotNull(scheme)
+        assertEquals("LOCAL", scheme!!.connectionType)
+        assertEquals(ConnectionProfile.LocalShellMode.SHIZUKU, scheme.resolvedLocalShellMode)
     }
 
     @Test

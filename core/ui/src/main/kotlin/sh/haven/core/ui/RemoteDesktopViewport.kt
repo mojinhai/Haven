@@ -94,6 +94,71 @@ import kotlinx.coroutines.withTimeoutOrNull
 const val TOUCHPAD_SENSITIVITY_MIN = 0.2f
 const val TOUCHPAD_SENSITIVITY_MAX = 3f
 
+/**
+ * Mouse button action bound to a desktop touch gesture (#836).
+ * Stored in DataStore by [storageValue].
+ */
+enum class DesktopGestureAction(val storageValue: String) {
+    RIGHT_CLICK("RIGHT_CLICK"),
+    MIDDLE_CLICK("MIDDLE_CLICK"),
+    LEFT_CLICK("LEFT_CLICK"),
+    NONE("NONE");
+
+    companion object {
+        fun fromStorage(value: String?, default: DesktopGestureAction): DesktopGestureAction =
+            entries.firstOrNull { it.storageValue == value } ?: default
+    }
+}
+
+/**
+ * Configurable touch gesture bindings shared across VNC, RDP, SPICE, GLKVM,
+ * and app-window remote viewports (#836).
+ */
+data class DesktopMouseGestureConfig(
+    val longPressAction: DesktopGestureAction = DesktopGestureAction.RIGHT_CLICK,
+    val twoFingerTapAction: DesktopGestureAction = DesktopGestureAction.MIDDLE_CLICK,
+    val threeFingerTapAction: DesktopGestureAction = DesktopGestureAction.NONE,
+) {
+    companion object {
+        val DEFAULT = DesktopMouseGestureConfig()
+    }
+}
+
+fun dispatchDesktopGestureAction(
+    action: DesktopGestureAction,
+    x: Int,
+    y: Int,
+    onLeftClick: (Int, Int) -> Unit,
+    onMiddleClick: (Int, Int) -> Unit,
+    onRightClick: (Int, Int) -> Unit,
+) {
+    when (action) {
+        DesktopGestureAction.LEFT_CLICK -> onLeftClick(x, y)
+        DesktopGestureAction.MIDDLE_CLICK -> onMiddleClick(x, y)
+        DesktopGestureAction.RIGHT_CLICK -> onRightClick(x, y)
+        DesktopGestureAction.NONE -> Unit
+    }
+}
+
+fun resolveRemoteMultiFingerTapAction(
+    isMouseDevice: Boolean,
+    totalFingers: Int,
+    multiFingerMovement: Float,
+    touchSlopPx: Float,
+    longPressFired: Boolean,
+    heldButton: Int?,
+    gestures: DesktopMouseGestureConfig,
+): DesktopGestureAction {
+    if (isMouseDevice || longPressFired || heldButton != null || multiFingerMovement >= touchSlopPx) {
+        return DesktopGestureAction.NONE
+    }
+    return when (totalFingers) {
+        2 -> gestures.twoFingerTapAction
+        3 -> gestures.threeFingerTapAction
+        else -> DesktopGestureAction.NONE
+    }
+}
+
 data class RemoteViewportTransform(
     val zoom: Float,
     val panX: Float,
@@ -414,6 +479,7 @@ fun remainingRemoteTouchLongPressTimeoutMs(
     touchSlopPx: Float,
     isFollowUpTouch: Boolean,
     heldButton: Int? = null,
+    longPressAction: DesktopGestureAction = DesktopGestureAction.RIGHT_CLICK,
     longPressMs: Long,
     elapsedMs: Long,
 ): Long = if (
@@ -426,6 +492,7 @@ fun remainingRemoteTouchLongPressTimeoutMs(
         touchSlopPx = touchSlopPx,
         isFollowUpTouch = isFollowUpTouch,
         heldButton = heldButton,
+        longPressAction = longPressAction,
     )
 ) {
     (longPressMs - elapsedMs).coerceAtLeast(1L)
@@ -442,8 +509,10 @@ fun shouldFireRemoteTouchLongPressRightClick(
     touchSlopPx: Float,
     isFollowUpTouch: Boolean,
     heldButton: Int? = null,
+    longPressAction: DesktopGestureAction = DesktopGestureAction.RIGHT_CLICK,
 ): Boolean =
-    !isMouseDevice &&
+    longPressAction != DesktopGestureAction.NONE &&
+        !isMouseDevice &&
         totalFingers == 1 &&
         !longPressFired &&
         !dragging &&
@@ -463,7 +532,16 @@ fun shouldFireRemotePostGestureTap(
     touchSlopPx: Float,
     longPressFired: Boolean,
     heldButton: Int? = null,
-): Boolean = totalFingers == 1 && totalMovement < touchSlopPx && !longPressFired && heldButton == null
+    isMouseDevice: Boolean = false,
+    longPressDisabled: Boolean = false,
+    gestureDurationMs: Long = 0L,
+    longPressMs: Long = 400L,
+): Boolean =
+    totalFingers == 1 &&
+        totalMovement < touchSlopPx &&
+        !longPressFired &&
+        heldButton == null &&
+        !(longPressDisabled && !isMouseDevice && gestureDurationMs >= longPressMs)
 
 /**
  * Mutable viewport zoom, pan, view size, and touchpad virtual-cursor state
@@ -474,14 +552,18 @@ class RemoteDesktopViewportState(
     initialPanX: Float = 0f,
     initialPanY: Float = 0f,
     initialCursor: Pair<Int, Int> = 0 to 0,
+    initialCursorF: Offset = Offset(initialCursor.first.toFloat(), initialCursor.second.toFloat()),
+    initialHasUserMovedCursor: Boolean = false,
+    initialSeededInputMode: String? = null,
 ) {
     var zoom by mutableFloatStateOf(initialZoom)
     var panX by mutableFloatStateOf(initialPanX)
     var panY by mutableFloatStateOf(initialPanY)
     var viewSize by mutableStateOf(IntSize.Zero)
     var virtualCursor by mutableStateOf(initialCursor)
-    var virtualCursorF by mutableStateOf(Offset(initialCursor.first.toFloat(), initialCursor.second.toFloat()))
-    internal var lastSeededInputMode: String? = null
+    var virtualCursorF by mutableStateOf(initialCursorF)
+    internal var lastSeededInputMode: String? = initialSeededInputMode
+    internal var hasUserMovedCursor: Boolean = initialHasUserMovedCursor
 
     val isTransformed: Boolean
         get() = zoom != 1f || panX != 0f || panY != 0f
@@ -498,9 +580,28 @@ class RemoteDesktopViewportState(
         panY = transform.panY
     }
 
-    fun setVirtualCursorPosition(pos: Pair<Int, Int>) {
+    fun setVirtualCursorPosition(pos: Pair<Int, Int>, fromUser: Boolean = true) {
         virtualCursor = pos
         virtualCursorF = Offset(pos.first.toFloat(), pos.second.toFloat())
+        hasUserMovedCursor = fromUser
+    }
+
+    /**
+     * Keep [virtualCursor] aligned with the server's reported [pointerPos]
+     * whenever [inputMode] changes OR before the user has moved the cursor in
+     * the current mode (#608). SPICE delivers `CURSOR_INIT` on a separate TCP
+     * channel that can arrive after the first display frame mounted the
+     * viewport with `pointerPos == (0, 0)`; without adopting that late seed,
+     * `SPICE_MOUSE_MODE_SERVER` relative deltas start from `(0, 0)` while the
+     * guest pointer sits at its initial offset, clamping the reachable area.
+     */
+    fun syncVirtualCursorSeed(inputMode: String, pointerPos: Pair<Int, Int>) {
+        if (lastSeededInputMode != inputMode) {
+            lastSeededInputMode = inputMode
+            setVirtualCursorPosition(pointerPos, fromUser = false)
+        } else if (!hasUserMovedCursor && pointerPos != virtualCursor) {
+            setVirtualCursorPosition(pointerPos, fromUser = false)
+        }
     }
 
     fun stepVirtualCursor(deltaX: Float, deltaY: Float, fbWidth: Int, fbHeight: Int): Pair<Int, Int> {
@@ -511,13 +612,41 @@ class RemoteDesktopViewportState(
         virtualCursorF = Offset(fx, fy)
         val pos = fx.toInt().coerceIn(0, maxX) to fy.toInt().coerceIn(0, maxY)
         virtualCursor = pos
+        hasUserMovedCursor = true
         return pos
     }
 
     companion object {
-        val Saver: Saver<RemoteDesktopViewportState, List<Float>> = Saver(
-            save = { listOf(it.zoom, it.panX, it.panY) },
-            restore = { RemoteDesktopViewportState(initialZoom = it[0], initialPanX = it[1], initialPanY = it[2]) },
+        val Saver: Saver<RemoteDesktopViewportState, ArrayList<Any?>> = Saver(
+            save = {
+                arrayListOf(
+                    it.zoom,
+                    it.panX,
+                    it.panY,
+                    it.virtualCursorF.x,
+                    it.virtualCursorF.y,
+                    it.hasUserMovedCursor,
+                    it.lastSeededInputMode,
+                )
+            },
+            restore = { saved ->
+                val zoom = (saved.getOrNull(0) as? Number)?.toFloat() ?: 1f
+                val panX = (saved.getOrNull(1) as? Number)?.toFloat() ?: 0f
+                val panY = (saved.getOrNull(2) as? Number)?.toFloat() ?: 0f
+                val cursorFx = (saved.getOrNull(3) as? Number)?.toFloat() ?: 0f
+                val cursorFy = (saved.getOrNull(4) as? Number)?.toFloat() ?: 0f
+                val userMoved = saved.getOrNull(5) as? Boolean ?: false
+                val seededMode = saved.getOrNull(6) as? String
+                RemoteDesktopViewportState(
+                    initialZoom = zoom,
+                    initialPanX = panX,
+                    initialPanY = panY,
+                    initialCursor = cursorFx.toInt() to cursorFy.toInt(),
+                    initialCursorF = Offset(cursorFx, cursorFy),
+                    initialHasUserMovedCursor = userMoved,
+                    initialSeededInputMode = seededMode,
+                )
+            },
         )
     }
 }
@@ -535,10 +664,7 @@ fun rememberRemoteDesktopViewportState(
     } else {
         remember { RemoteDesktopViewportState(initialCursor = pointerPos) }
     }
-    if (state.lastSeededInputMode != inputMode) {
-        state.lastSeededInputMode = inputMode
-        state.setVirtualCursorPosition(pointerPos)
-    }
+    state.syncVirtualCursorSeed(inputMode = inputMode, pointerPos = pointerPos)
     return state
 }
 
@@ -585,6 +711,7 @@ fun RemoteDesktopViewport(
     state: RemoteDesktopViewportState,
     inputMode: String,
     touchpadSensitivity: Float = 1f,
+    mouseGestures: DesktopMouseGestureConfig = DesktopMouseGestureConfig.DEFAULT,
     twoFingerScroll: Boolean = false,
     scrollWhenUnzoomed: Boolean = false,
     coverFill: Boolean = false,
@@ -624,6 +751,7 @@ fun RemoteDesktopViewport(
     val currentCoverFill by rememberUpdatedState(coverFill)
     val currentMinZoom by rememberUpdatedState(minZoom)
     val currentMaxZoom by rememberUpdatedState(maxZoom)
+    val currentMouseGestures by rememberUpdatedState(mouseGestures)
     val currentTwoFingerScroll by rememberUpdatedState(twoFingerScroll)
     val currentScrollWhenUnzoomed by rememberUpdatedState(scrollWhenUnzoomed)
     val currentHeldButton by rememberUpdatedState(heldButton)
@@ -748,6 +876,7 @@ fun RemoteDesktopViewport(
 
                     var event: PointerEvent
                     do {
+                        val activeLongPressAction = currentMouseGestures.longPressAction
                         val remaining = remainingRemoteTouchLongPressTimeoutMs(
                             isMouseDevice = isMouseDevice,
                             totalFingers = totalFingers,
@@ -757,6 +886,7 @@ fun RemoteDesktopViewport(
                             touchSlopPx = touchSlopPx,
                             isFollowUpTouch = isFollowUpTouch,
                             heldButton = currentHeldButton,
+                            longPressAction = activeLongPressAction,
                             longPressMs = longPressMs,
                             elapsedMs = SystemClock.uptimeMillis() - downUptimeMs,
                         )
@@ -778,6 +908,7 @@ fun RemoteDesktopViewport(
                                     touchSlopPx = touchSlopPx,
                                     isFollowUpTouch = isFollowUpTouch,
                                     heldButton = currentHeldButton,
+                                    longPressAction = activeLongPressAction,
                                 )
                             ) {
                                 val (vx, vy) = resolveRemoteTouchLongPressTarget(
@@ -798,7 +929,14 @@ fun RemoteDesktopViewport(
                                         pos
                                     },
                                 )
-                                currentOnRightClick(vx, vy)
+                                dispatchDesktopGestureAction(
+                                    action = activeLongPressAction,
+                                    x = vx,
+                                    y = vy,
+                                    onLeftClick = currentOnTap,
+                                    onMiddleClick = currentOnMiddleClick,
+                                    onRightClick = currentOnRightClick,
+                                )
                                 longPressFired = true
                             }
                             event = awaitPointerEvent(PointerEventPass.Initial)
@@ -836,14 +974,14 @@ fun RemoteDesktopViewport(
                             if (gestureStarted && count == prevCount) {
                                 val dx = centroid.x - prevCentroid.x
                                 val dy = centroid.y - prevCentroid.y
-                                twoFingerMovement += abs(dx) + abs(dy)
+                                val spanDelta = if (prevSpan > 0f) abs(span - prevSpan) else 0f
+                                twoFingerMovement += abs(dx) + abs(dy) + spanDelta
                                 val threeFingerCallback = currentThreeFingerPinch
                                 if (threeFingerCallback != null && totalFingers >= 3) {
                                     if (prevSpan > 0f && span > 0f) {
                                         threeFingerCallback(span / prevSpan)
                                     }
                                 } else {
-                                    val spanDelta = if (prevSpan > 0f) abs(span - prevSpan) else 0f
                                     val pinching = spanDelta > 2f && spanDelta >= abs(dx) + abs(dy)
                                     if (pinching && prevSpan > 0f && span > 0f) {
                                         state.applyTransform(
@@ -984,7 +1122,22 @@ fun RemoteDesktopViewport(
                     }
 
                     val activeHeld = currentHeldButton
-                    if (shouldFireRemotePostGestureTap(totalFingers, totalMovement, touchSlopPx, longPressFired, activeHeld)) {
+                    val activeGestures = currentMouseGestures
+                    val upUptimeMs = event.changes.maxOfOrNull { it.uptimeMillis } ?: SystemClock.uptimeMillis()
+                    val gestureDurationMs = (upUptimeMs - downUptimeMs).coerceAtLeast(0L)
+                    if (
+                        shouldFireRemotePostGestureTap(
+                            totalFingers = totalFingers,
+                            totalMovement = totalMovement,
+                            touchSlopPx = touchSlopPx,
+                            longPressFired = longPressFired,
+                            heldButton = activeHeld,
+                            isMouseDevice = isMouseDevice,
+                            longPressDisabled = activeGestures.longPressAction == DesktopGestureAction.NONE,
+                            gestureDurationMs = gestureDurationMs,
+                            longPressMs = longPressMs,
+                        )
+                    ) {
                         val (vx, vy) = if (!isMouseDevice && inputMode == "TOUCHPAD") {
                             state.virtualCursor
                         } else {
@@ -1011,24 +1164,42 @@ fun RemoteDesktopViewport(
                         } else {
                             0L
                         }
-                    } else if (totalFingers == 2 && twoFingerMovement < touchSlopPx && !longPressFired && activeHeld == null) {
-                        val (mx, my) = if (inputMode == "TOUCHPAD") {
-                            state.virtualCursor
-                        } else {
-                            screenToRemoteDesktop(
-                                offset = prevCentroid,
-                                viewSize = state.viewSize,
-                                fbWidth = frame.width,
-                                fbHeight = frame.height,
-                                zoom = state.zoom,
-                                panX = state.panX,
-                                panY = state.panY,
-                                coverFill = currentCoverFill,
+                    } else {
+                        val multiTapAction = resolveRemoteMultiFingerTapAction(
+                            isMouseDevice = isMouseDevice,
+                            totalFingers = totalFingers,
+                            multiFingerMovement = twoFingerMovement,
+                            touchSlopPx = touchSlopPx,
+                            longPressFired = longPressFired,
+                            heldButton = activeHeld,
+                            gestures = activeGestures,
+                        )
+                        if (multiTapAction != DesktopGestureAction.NONE) {
+                            val (mx, my) = if (inputMode == "TOUCHPAD") {
+                                state.virtualCursor
+                            } else {
+                                val pos = screenToRemoteDesktop(
+                                    offset = prevCentroid,
+                                    viewSize = state.viewSize,
+                                    fbWidth = frame.width,
+                                    fbHeight = frame.height,
+                                    zoom = state.zoom,
+                                    panX = state.panX,
+                                    panY = state.panY,
+                                    coverFill = currentCoverFill,
+                                )
+                                state.setVirtualCursorPosition(pos)
+                                pos
+                            }
+                            dispatchDesktopGestureAction(
+                                action = multiTapAction,
+                                x = mx,
+                                y = my,
+                                onLeftClick = currentOnTap,
+                                onMiddleClick = currentOnMiddleClick,
+                                onRightClick = currentOnRightClick,
                             )
                         }
-                        currentOnMiddleClick(mx, my)
-                        lastTapUpMs = 0L
-                    } else {
                         lastTapUpMs = 0L
                     }
                 }

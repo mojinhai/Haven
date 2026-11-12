@@ -376,6 +376,11 @@
     <string name="rclone_import_select_count">Увози се %1$d удаљени(х)</string>
     <string name="rclone_import_done">Увезено је %1$d, прескочено %2$d, није успело %3$d.</string>
     <string name="rclone_import_menu">Увоз rclone конфигурације…</string>
+    <string name="rclone_import_already_added_overwrite">већ је додат (означите за преписивање)</string>
+    <string name="rclone_import_orphaned_repair">у rclone.conf без картице (биће поправљено)</string>
+    <string name="rclone_import_reset_button">Ресетуј rclone складиште…</string>
+    <string name="rclone_import_reset_confirm">Уклонити сачуване rclone везе и испразнити rclone.conf? SSH кључеви и остале везе се задржавају.</string>
+    <string name="rclone_import_reset_done">Очишћено веза складишта: %1$d и удаљених у rclone.conf: %2$d.</string>
     <string name="connections_section_vnc">VNC подешавања</string>
     <string name="connections_section_rdp">RDP подешавања</string>
     <string name="connections_section_spice">SPICE подешавања</string>
@@ -540,4 +545,13 @@
     <string name="connections_helper_persist_rediscovered_host">Ажурира профил када локални рачунар понуди исти SSH кључ домаћина на новој IPv4 адреси. Искључите да бисте се повезали преко откривене адресе само за ту сесију и задржали подешени домаћин (нпр. WireGuard IP).</string>
     <string name="connections_auth_banner_title">SSH аутентификација</string>
     <string name="connections_auth_banner_open_link">Отвори везу</string>
+    <string name="connections_field_keyboard_layout">Распоред тастатуре</string>
+    <string name="connections_keyboard_layout_auto">Аутоматски (језик уређаја)</string>
+    <string name="connections_helper_keyboard_layout_rdp">Објављује овај распоред RDP серверу и мапира унете знакове у његове скан-кодове.</string>
+    <string name="connections_helper_keyboard_layout_spice">SPICE шаље сирове скан-кодове — изаберите распоред тастатуре подешен у гостујућој ВМ.</string>
+    <string name="connections_shizuku_shell_label">Shizuku љуска</string>
+    <string name="connections_local_mode_proot">PRoot</string>
+    <string name="connections_local_mode_android">Android</string>
+    <string name="connections_local_mode_shizuku">Shizuku</string>
+    <string name="connections_local_shell_shizuku_desc">Покреће привилеговану Андроид љуску (/system/bin/sh) преко сервиса Shizuku (ADB uid 2000 или root). Потребно је да Shizuku буде покренут и одобрен.</string>
 </resources>

@@ -5,10 +5,55 @@ the corresponding GitHub Release; a release can't ship without its section
 (enforced by `scripts/check-changelog.sh` in CI). The GitHub "Full Changelog"
 compare link is appended automatically — don't add it here.
 
+## v5.94.39
+
+- Migrate `archlinux-x86_64` PRoot guests off the broken `mirror.rackspace.com` default (`HTTP 403`) onto `geo.mirror.pkgbuild.com` with `fastly.mirror.pkgbuild.com` fallback, apply mirror configuration across foreign-arch distros and interactive/non-interactive PRoot sessions, and fail fast if keyring sync fails before system upgrades (#840, thanks @NAZY-OS).
+- Bump `tailscale.com` to `v1.104.7` and `golang.org/x/crypto` to `v0.59.0` in the embedded Go bridge.
+
+## v5.94.38
+
+- Map PC Set-1 extended scancodes `0xE05B`..`0xE05D` (`MetaLeft`, `MetaRight`, `ContextMenu`) and lock scancodes `0x45`..`0x46` (`NumLock`, `ScrollLock`) in GLKVM sessions so the toolbar `Win` toggle and hardware Super/Windows keys forward chords such as `Win+L` to `kvmd`.
+- Upgrade IronRDP crates to crates.io `0.12`/`0.13` (retiring the git patch pin while keeping VRDP frame repair and server redirection) and bump `rclone` to `v1.76.0`.
+
+## v5.94.37
+
+- Route PRoot DNS queries (including explicit `dig @server` and `+tcp` requests) over TCP through active SOCKS5 and HTTP CONNECT tunnels under `--net-policy=lockdown`, and filter unreachable LAN DHCP resolvers when proxied (#838, thanks @DragonXen).
+- Delete orphaned `rclone.conf` sections when removing rclone connections, allow overwriting or repairing remotes in **Import rclone.conf**, and add a two-step **Reset rclone storage** action (#839, thanks @ghanan).
+
+## v5.94.36
+
+- Add a **Shizuku** local shell mode on `LOCAL` profiles (`shizuku://` quick-connect and MCP `open_local_shell`), spawning PTY sessions in Shizuku (`uid 2000` over ADB or `uid 0` over root) via `Shizuku.UserService` (#837, thanks @DragonXen).
+- Bind `/usr/local/bin/shizuku` and `/usr/local/bin/rish` inside PRoot sessions over a peer-UID-verified socket so guest tools can run Android shell commands through Shizuku (#837).
+
+## v5.94.35
+
+- Enforce fail-closed socket filtering in PRoot when a per-distro proxy is active and redirect custom `ip:port` DNS resolvers (such as `127.0.0.1:5400`) at the syscall boundary so direct UDP/TCP DNS queries cannot bypass the proxy (#838, thanks @DragonXen).
+- Update `connectbot/sshlib` to 0.6.9 for SSH channel-request replies and fold `termux/proot` v5.1.107.102 into the bundled PRoot fork.
+
+## v5.94.34
+
+- Coalesce SPICE primary-surface display updates at 60 Hz, ignore off-screen surface pixmaps, reuse one framebuffer Bitmap per resolution, and isolate frameSeq reads from the windowed toolbar (#607, thanks @empanadablues).
+- Guard libvterm against excess CSI parameters and subparameters, clamp oversized CSI and OSC numbers before overflow, ignore REP before any graphic character, and reset scroll regions invalidated by terminal resize.
+
+## v5.94.33
+
+- Span retained scrollback rows on terminal Select All on the primary buffer while keeping alternate-screen Select All scoped to the visible grid (#805, thanks @del26).
+- Add an optional local HTTPS loopback MCP listener (`https://127.0.0.1:8750/mcp`) under `Settings -> AI agent (MCP)` with persistent ECDSA P-256 root CA `.crt` export and custom PKCS#12 `.p12` server bundle import (#735, thanks @wzy603).
+
+## v5.94.32
+
+- Serialize local and UML guest PTY session attachment with MCP `open_local_shell`, replay buffered scrollback atomically when attaching the agent tee, drain queued main-looper `writeInput` updates before `open_local_shell` returns, and retain backing `AgentHandles` behind UI-opened tabs across Activity teardown (#555).
+- Seed remote-desktop touchpad `virtualCursor` from late server `CURSOR_INIT` coordinates before user movement, preserve sub-pixel touchpad cursor state across configuration/fullscreen saveable restore, deduplicate SPICE cursor shape bitmaps across pointer moves, and log SPICE surface-size transitions and click events under verbose logging (#607, #608, thanks @empanadablues).
+
+## v5.94.31
+
+- Fix SPICE key-release scancodes (PS/2 Set-1 `0x80` break bit) and `0xE0` extended-key byte order, add a per-profile **Keyboard layout** picker on RDP and SPICE profiles, and add XKB-verified base scancode remap tables for Spanish (Spain and Latin America), Italian, Swiss German/French, Belgian French, Portuguese (Portugal and Brazil), and Swedish/Finnish (#606, thanks @empanadablues).
+- Add configurable desktop touch click bindings under `Settings -> Terminal -> Gestures` (**Desktop long-press gesture**, **Desktop two-finger tap**, and **Desktop three-finger tap**, each selectable between `Right-click`, `Middle-click`, `Left-click`, and `Off`) across VNC, RDP, SPICE, GLKVM, and local app windows (#836, thanks @thegoodpackage).
+
 ## v5.94.30
 
 - Show live download, archive extraction, and rootfs configuration progress during PRoot Linux setup and keep `SessionService` running in the foreground while PRoot setup, local desktops, and System VMs are active in the background (#831, #832, thanks @NAZY-OS).
-- Add per-distro PRoot network routing (`Auto`, `Direct`, `Specific tunnel`, and `Offline`) with custom `/etc/resolv.conf` DNS overrides and per-tunnel loopback SOCKS5 exposure via `HAVEN_SOCKS5_PROXY` (#835, thanks @NAZY-OS).
+- Add per-distro PRoot network routing (`Follow active tunnel`, `Direct`, `Haven tunnel`, `Custom SOCKS5`, and `Custom HTTP`) with `NO_PROXY`, loopback tunnel SOCKS5 listeners, and optional `proxychains4` wrapping (#835, thanks @DragonXen).
 - Bundle the 19 Markdown user guide pages into app assets and add a searchable offline **User guide** reader under `Settings -> About` (#833, thanks @NAZY-OS).
 
 ## v5.94.29

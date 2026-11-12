@@ -50,6 +50,9 @@ private const val PREF_DNS_MODE = "proot_dns_mode"
 private const val PREF_DNS_SERVERS = "proot_dns_servers"
 private const val PREF_GUEST_USERNAME = "guest_username"
 
+/** Per-distro default login user (#567). Key suffix is the distro id. */
+private const val PREF_GUEST_USERNAME_PREFIX = "guest_username_"
+
 /** Per-distro custom bind mounts (#301). Key suffix is the distro id. */
 private const val PREF_CUSTOM_BINDS_PREFIX = "custom_binds_"
 
@@ -679,10 +682,21 @@ internal class PackageInstallProgressTracker {
  * extracted to filesDir/proot/rootfs/alpine/.
  */
 @Singleton
-class ProotManager @Inject constructor(
-    @ApplicationContext private val context: Context,
+class ProotManager constructor(
+    private val context: Context,
     private val installLogRepository: ProotInstallLogRepository,
 ) {
+    @Volatile
+    private var shizukuBridgeServer: ShizukuBridgeServer? = null
+
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        installLogRepository: ProotInstallLogRepository,
+        shizukuBridgeServer: ShizukuBridgeServer,
+    ) : this(context, installLogRepository) {
+        this.shizukuBridgeServer = shizukuBridgeServer
+    }
     /**
      * Which phase of the OS install pipeline the state belongs to.
      * Used by [SetupState.Error] to attribute failures, so the UI
@@ -787,6 +801,15 @@ class ProotManager @Inject constructor(
      */
     val mirrorRegionFlow: StateFlow<MirrorRegion> = _mirrorRegion.asStateFlow()
     val mirrorRegion: MirrorRegion get() = _mirrorRegion.value
+
+    /**
+     * Ensure [distroId]'s repository mirror config under [rootfsDir] reflects
+     * [mirrorRegion] (and migrates any retired default hosts such as Arch
+     * `x86_64`'s `mirror.rackspace.com`, #840). Idempotent no-op once applied
+     * and leaves custom user mirror URLs untouched.
+     */
+    fun applyMirrorConfig(rootfsDir: File, distroId: String = activeDistroId): List<String> =
+        MirrorCatalog.apply(rootfsDir, distroId, _mirrorRegion.value)
 
     /**
      * Change the package-mirror region. Persists the choice and rewrites
@@ -938,20 +961,72 @@ class ProotManager @Inject constructor(
         _guestUsername.value = clean
     }
 
+    private val _guestUserRev = MutableStateFlow(0)
+    /** Bumped whenever any distro's default login user changes (#567). */
+    val guestUserRev: StateFlow<Int> = _guestUserRev.asStateFlow()
+
     /**
-     * Provision the configured [guestUsername] inside [rootfsDir] if non-empty,
-     * returning the [GuestUserSpec] to launch PRoot with.
+     * Default non-root login username for [distroId] (#567), or `""` for `root`.
+     *
+     * When an explicit per-distro key (`guest_username_<distroId>`) is stored, its
+     * sanitized value wins — including `""` (`root`), so one distro can explicitly
+     * stay `root` even when a legacy global [PREF_GUEST_USERNAME] exists. Otherwise
+     * falls back to the global [guestUsername] (#718) so existing single-setting
+     * upgrades keep their configured user without migration.
      */
-    fun ensureGuestUser(rootfsDir: File): GuestUserSpec =
-        provisionGuestUser(rootfsDir, _guestUsername.value)
+    fun guestUsernameFor(distroId: String): String {
+        val key = "$PREF_GUEST_USERNAME_PREFIX$distroId"
+        if (prefs.contains(key)) {
+            return sanitizeGuestUsername(prefs.getString(key, "").orEmpty())
+        }
+        return _guestUsername.value
+    }
+
+    /** True when [distroId] has an explicit per-distro login user override (#567). */
+    fun hasGuestUsernameOverride(distroId: String): Boolean =
+        prefs.contains("$PREF_GUEST_USERNAME_PREFIX$distroId")
+
+    /** Set the default login user for [distroId] (#567). `"root"` or blank stores `""` (`root`). */
+    fun setGuestUsernameFor(distroId: String, raw: String) {
+        val clean = sanitizeGuestUsername(raw)
+        val key = "$PREF_GUEST_USERNAME_PREFIX$distroId"
+        if (prefs.contains(key) && sanitizeGuestUsername(prefs.getString(key, "").orEmpty()) == clean) return
+        prefs.edit().putString(key, clean).apply()
+        _guestUserRev.value++
+    }
+
+    /** Remove [distroId]'s explicit login user override so it inherits the default (#567). */
+    fun clearGuestUsernameFor(distroId: String) {
+        val key = "$PREF_GUEST_USERNAME_PREFIX$distroId"
+        if (!prefs.contains(key)) return
+        prefs.edit().remove(key).apply()
+        _guestUserRev.value++
+    }
+
+    /**
+     * Provision the configured login user for [distroId] inside [rootfsDir] if non-empty,
+     * returning the [GuestUserSpec] to launch PRoot with (#718, #567).
+     */
+    @JvmOverloads
+    fun ensureGuestUser(rootfsDir: File, distroId: String = activeDistroId): GuestUserSpec =
+        provisionGuestUser(rootfsDir, guestUsernameFor(distroId))
+
+    private val dnsProxyBridge = ProotDnsProxyBridge()
 
     /**
      * Write `etc/resolv.conf` under [rootfsDir] from the current DNS setting, returning
      * the servers used. Called on every guest launch as well as at install time, so
      * changing the setting takes effect without reinstalling the distro.
      */
-    fun applyResolvConf(rootfsDir: File): List<String> =
-        ProotDns.write(rootfsDir, context, dnsMode, dnsServers)
+    @JvmOverloads
+    fun applyResolvConf(rootfsDir: File, distroId: String = activeDistroId): List<String> {
+        val proxyActive = ProotRouting.resolveActiveProxyEndpoint(
+            config = routingConfig(distroId),
+            cacheDir = context.cacheDir,
+            tunnelStarter = tunnelSocksStarter,
+        ) != null
+        return ProotDns.write(rootfsDir, context, dnsMode, dnsServers, proxyActive = proxyActive)
+    }
 
     /**
      * Android system partitions exposed by [bindAndroidSystem]. `/apex` carries the
@@ -1689,6 +1764,49 @@ class ProotManager @Inject constructor(
     fun deviceModelDevicetreeBind(): String? {
         val f = File(context.cacheDir, "sysinfo/model")
         return if (f.exists()) "${f.absolutePath}:/sys/firmware/devicetree/base/model" else null
+    }
+
+    /**
+     * Static guest CLI helper (`libhaven-shizuku.so`) compiled from
+     * `haven_shizuku.c` (#837), or null when native libs are absent (e.g. JVM
+     * unit tests).
+     */
+    val shizukuGuestBinary: String?
+        get() {
+            val libDir = context.applicationInfo?.nativeLibraryDir ?: return null
+            val f = File(libDir, "libhaven-shizuku.so")
+            return if (f.isFile && f.canExecute()) f.absolutePath else null
+        }
+
+    /**
+     * PRoot bind arguments mounting `libhaven-shizuku.so` at
+     * `/usr/local/bin/shizuku` and `/usr/local/bin/rish` inside [rootfsDir] and
+     * ensuring [ShizukuBridgeServer] is listening at `/tmp/.haven-shizuku.sock`
+     * (#837).
+     */
+    fun shizukuGuestBindArgs(rootfsDir: File, longForm: Boolean = false): Array<String> {
+        val helper = shizukuGuestBinary ?: return emptyArray()
+        shizukuBridgeServer?.ensureStarted()
+        runCatching {
+            val binDir = File(rootfsDir, "usr/local/bin")
+            binDir.mkdirs()
+            for (name in listOf("shizuku", "rish")) {
+                val placeholder = File(binDir, name)
+                if (!placeholder.exists()) {
+                    placeholder.createNewFile()
+                    applyPosixMode(placeholder, 0b111_101_101)
+                }
+            }
+        }
+        val specs = listOf(
+            "$helper:/usr/local/bin/shizuku",
+            "$helper:/usr/local/bin/rish",
+        )
+        return if (longForm) {
+            specs.map { "--bind=$it" }.toTypedArray()
+        } else {
+            specs.flatMap { listOf("-b", it) }.toTypedArray()
+        }
     }
 
     // --- User-imported distros (#284) ---
@@ -3707,6 +3825,38 @@ class ProotManager @Inject constructor(
     }
 
     /**
+     * PRoot `--net-policy=<spec>` CLI argument for [distroId] (#838), combining
+     * fail-closed proxy enforcement (`lockdown` + `allow=`) with custom `ip:port`
+     * DNS port-53 redirection (`dns=`). Empty when neither applies.
+     */
+    fun netPolicyArgs(distroId: String = activeDistroId): List<String> {
+        val cfg = routingConfig(distroId)
+        val dnsSpecs = ProotDns.customPortRedirectSpecs(dnsMode, dnsServers)
+        val activeProxy = ProotRouting.resolveActiveProxyEndpoint(
+            config = cfg,
+            cacheDir = context.cacheDir,
+            tunnelStarter = tunnelSocksStarter,
+        )
+        val bridgeListeners = if (activeProxy != null) {
+            val upstreams = ProotDns.proxyUpstreamEndpoints(dnsMode, dnsServers) {
+                ProotDns.systemNameservers(context)
+            }
+            runCatching { dnsProxyBridge.ensureStarted(activeProxy, upstreams) }.getOrNull()
+        } else {
+            null
+        }
+        val spec = ProotRouting.buildNetPolicySpec(
+            config = cfg,
+            cacheDir = context.cacheDir,
+            dnsRedirectSpecs = dnsSpecs,
+            dnsProxyIpv4Spec = bridgeListeners?.ipv4Spec,
+            dnsProxyIpv6Spec = bridgeListeners?.ipv6Spec,
+            tunnelStarter = tunnelSocksStarter,
+        ) ?: return emptyList()
+        return listOf("--net-policy=$spec")
+    }
+
+    /**
      * Build and start a PRoot process running [command] in the active
      * rootfs, with combined stdout+stderr on the returned Process's
      * inputStream. Callers that need to stream output incrementally (a
@@ -3723,6 +3873,7 @@ class ProotManager @Inject constructor(
         // resolv.conf points at resolvers the network won't route to — so it must
         // reflect the current DNS setting, not whatever was written at install time.
         applyResolvConf(activeRootfsDir)
+        applyMirrorConfig(activeRootfsDir, activeDistroId)
         ensureAptSandboxConfig(activeRootfsDir)
         val loaderPath = File(context.applicationInfo.nativeLibraryDir, "libproot_loader.so").absolutePath
         // Mirror termux/proot-distro v4.29.0's `run_proot_cmd` invocation
@@ -3752,6 +3903,7 @@ class ProotManager @Inject constructor(
             // Inert unless the active rootfs is marked foreign AND its loader is
             // bundled — otherwise an empty spread.
             *qemuUserArgs(activeDistroId).toTypedArray(),
+            *netPolicyArgs(activeDistroId).toTypedArray(),
             "--rootfs=$rootfsPath",
             guestUser.prootLongIdentityArg,
             "--cwd=${guestUser.home}",
@@ -3770,6 +3922,7 @@ class ProotManager @Inject constructor(
             *fakeProcBindArgs(activeRootfsDir, longForm = true),
             "--bind=$sysSelinuxMask",
             "--bind=${context.cacheDir.absolutePath}:/tmp",
+            *shizukuGuestBindArgs(activeRootfsDir, longForm = true),
             // #304: surface the device model at the devicetree path fastfetch reads.
             *(deviceModelDevicetreeBind()?.let { arrayOf("--bind=$it") } ?: emptyArray()),
             // #304 part 2: optionally expose Android's system partitions (opt-in).
@@ -3789,6 +3942,7 @@ class ProotManager @Inject constructor(
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "TERM=xterm-256color",
             "TMPDIR=/tmp",
+            "${ShizukuBridgeProtocol.SOCKET_ENV_VAR}=${ShizukuBridgeProtocol.GUEST_SOCKET_PATH}",
             *PROOT_SANDBOX_ENV.toTypedArray(),
             *run {
                 val routingCfg = routingConfig(activeDistroId)
@@ -4999,6 +5153,7 @@ chmod +x /root/.vnc/xstartup""")
         if (!DistroCatalog.isBuiltin(distroId)) {
             persistCustomDistros(customDistros.filter { it.id != distroId })
         }
+        clearGuestUsernameFor(distroId)
         if (activeDistroId == distroId) {
             reconcileActiveDistro()
         }

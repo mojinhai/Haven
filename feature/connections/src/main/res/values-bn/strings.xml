@@ -542,6 +542,11 @@
     <string name="rclone_import_select_count">%1$d রিমোট ইমপোর্ট করুন</string>
     <string name="rclone_import_done">%1$d ইমপোর্ট হয়েছে, %2$d বাদ, %3$d ব্যর্থ।</string>
     <string name="rclone_import_menu">rclone কনফিগ ইমপোর্ট করুন…</string>
+    <string name="rclone_import_already_added_overwrite">ইতিমধ্যে যোগ করা হয়েছে (ওভাররাইট করতে টিক দিন)</string>
+    <string name="rclone_import_orphaned_repair">কার্ড ছাড়াই rclone.conf-এ আছে (মেরামত করা হবে)</string>
+    <string name="rclone_import_reset_button">rclone স্টোরেজ রিসেট করুন…</string>
+    <string name="rclone_import_reset_confirm">সংরক্ষিত rclone সংযোগগুলি মুছে rclone.conf পরিষ্কার করবেন? SSH কী এবং অন্যান্য সংযোগ অক্ষত থাকবে।</string>
+    <string name="rclone_import_reset_done">%1$dটি স্টোরেজ সংযোগ এবং %2$dটি rclone.conf রিমোট মুছে ফেলা হয়েছে।</string>
     <string name="connections_section_spice">SPICE সেটিংস</string>
     <string name="connections_section_mcp">AI এজেন্ট (MCP)</string>
     <string name="connections_rclone_configure_first">সংযোগ সংরক্ষণের আগে এই রিমোট সংরক্ষণ করতে “কনফিগার ও যাচাই”-এ ট্যাপ করুন।</string>
@@ -608,4 +613,13 @@
     <string name="connections_helper_saved_password">ঐচ্ছিক। Android Keystore-এ এনক্রিপ্ট করা থাকে এবং SSH পাসওয়ার্ড লগইন ও টার্মিনালে বায়োমেট্রিক sudo অটোফিলের জন্য ব্যবহৃত হয়।</string>
     <string name="connections_auth_banner_title">SSH প্রমাণীকরণ</string>
     <string name="connections_auth_banner_open_link">লিঙ্ক খুলুন</string>
+    <string name="connections_field_keyboard_layout">কীবোর্ড লেআউট</string>
+    <string name="connections_keyboard_layout_auto">স্বয়ংক্রিয় (ডিভাইসের ভাষা)</string>
+    <string name="connections_helper_keyboard_layout_rdp">RDP সার্ভারে এই লেআউটটি ঘোষণা করে এবং টাইপ করা অক্ষরগুলিকে এর স্ক্যানকোডে ম্যাপ করে।</string>
+    <string name="connections_helper_keyboard_layout_spice">SPICE কাঁচা স্ক্যানকোড পাঠায়, তাই গেস্ট VM-এর ভেতরে কনফিগার করা কীবোর্ড লেআউটটি বেছে নিন।</string>
+    <string name="connections_shizuku_shell_label">Shizuku শেল</string>
+    <string name="connections_local_mode_proot">PRoot</string>
+    <string name="connections_local_mode_android">Android</string>
+    <string name="connections_local_mode_shizuku">Shizuku</string>
+    <string name="connections_local_shell_shizuku_desc">Shizuku (ADB uid 2000 বা root) এর মাধ্যমে উন্নত অনুমতিসহ Android শেল (/system/bin/sh) চালায়। এজন্য Shizuku চালু ও অনুমোদিত থাকতে হবে।</string>
 </resources>
