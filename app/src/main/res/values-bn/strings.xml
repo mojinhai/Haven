@@ -215,6 +215,10 @@
     <string name="app_system_vm_import_source">ইমেজ URL বা ডিভাইসে পথ</string>
     <string name="app_system_vm_import_arch">গেস্ট আর্কিটেকচার</string>
     <string name="app_system_vm_import_arch_hint">ইমেজের সঙ্গে মিলতে হবে — ভুল টার্গেট কোনো ত্রুটি দেখায় না, শুধু কখনও বুট হয় না।</string>
+    <string name="app_system_vm_upgrade_qemu11">QEMU 11 + Virgl আপগ্রেড করুন</string>
+    <string name="app_system_vm_import_gpu">GPU ত্বরণ</string>
+    <string name="app_system_vm_import_uefi">UEFI ফার্মওয়্যার (OVMF)</string>
+    <string name="app_system_vm_import_tpm2">TPM 2.0 (swtpm, Windows 11)</string>
 
     <!-- Desktop manager: desktops inside the UML guest (docs/plans/uml-dm.md) -->
     <string name="app_uml_desktop_title">UML গেস্ট ডেস্কটপ</string>
@@ -392,4 +396,12 @@
     <string name="app_desktop_dns_custom_err_invalid">IP অথবা IP:port ঠিকানা লিখুন (যেমন 1.1.1.1, 127.0.0.1:5400)।</string>
     <string name="app_desktop_routing_block_direct_title">প্রক্সি-বহির্ভূত ট্রাফিক ব্লক করুন</string>
     <string name="app_desktop_routing_block_direct_description">PRoot-এ সরাসরি আউটবাউন্ড সকেট ও DNS কুয়েরি ব্লক করে যাতে গেস্ট প্রোগ্রাম সক্রিয় প্রক্সি এড়িয়ে যেতে না পারে।</string>
+    <string name="app_guest_services_title">গেস্ট সার্ভিস</string>
+    <string name="app_guest_services_description">সক্রিয় Linux ডিস্ট্রোতে লুপব্যাকে চলমান ব্যাকগ্রাউন্ড সার্ভার।</string>
+    <string name="app_guest_services_running">চলমান · 127.0.0.1:%1$d</string>
+    <string name="app_guest_services_stopped">বন্ধ · 127.0.0.1:%1$d</string>
+    <string name="app_desktop_engine_title">কন্টেইনার ইঞ্জিন</string>
+    <string name="app_desktop_engine_description">নেটিভ arm64 শেল ও ডেস্কটপের ইঞ্জিন। QEMU এমুলেশন, লো-পোর্ট রিম্যাপিং বা সরাসরি ট্রাফিক ব্লকিং সক্রিয় থাকলে স্বয়ংক্রিয়ভাবে PRoot ব্যবহৃত হয়।</string>
+    <string name="app_desktop_engine_proot">PRoot (ডিফল্ট)</string>
+    <string name="app_desktop_engine_chroot_ng">chroot-ng (seccomp, arm64)</string>
 </resources>

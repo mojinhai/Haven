@@ -115,6 +115,7 @@ class McpTools private constructor(
     internal var mcpPortProvider: () -> Int,
     private val updateChecker: sh.haven.core.data.update.UpdateChecker,
     textRecognizer: sh.haven.core.scan.TextRecognizer?,
+    private val adbBridgeController: AdbWirelessBridgeController = AdbWirelessBridgeController(context),
 ) {
 
     @Inject
@@ -158,6 +159,7 @@ class McpTools private constructor(
         agentConsentManager: sh.haven.core.data.agent.AgentConsentManager,
         updateChecker: sh.haven.core.data.update.UpdateChecker,
         textRecognizer: sh.haven.core.scan.TextRecognizer,
+        adbBridgeController: AdbWirelessBridgeController,
     ) : this(
         injectedProviders = injectedProviders,
         context = context,
@@ -199,6 +201,7 @@ class McpTools private constructor(
         mcpPortProvider = { MCP_REVERSE_TUNNEL_PORT },
         updateChecker = updateChecker,
         textRecognizer = textRecognizer,
+        adbBridgeController = adbBridgeController,
     )
 
     internal constructor(
@@ -274,6 +277,7 @@ class McpTools private constructor(
         usbProxyServer: sh.haven.core.usb.UsbProxyServer =
             sh.haven.core.usb.UsbProxyServer(usbBroker),
         extraProviders: Set<ToolProvider> = emptySet(),
+        adbBridgeController: AdbWirelessBridgeController = AdbWirelessBridgeController(context),
     ) : this(
         injectedProviders = linkedSetOf<ToolProvider>(
             KeyStoreToolProvider(
@@ -387,6 +391,7 @@ class McpTools private constructor(
         mcpPortProvider = mcpPortProvider,
         updateChecker = updateChecker,
         textRecognizer = textRecognizer,
+        adbBridgeController = adbBridgeController,
     )
 
     private val prootManager get() = localSessionManager.prootManager
@@ -875,7 +880,7 @@ class McpTools private constructor(
         ) { _ -> readClipboard() },
 
         "get_preference" to ToolHandler(
-            description = "Read a Haven user preference by key. Whitelisted keys: terminal_scrollback_rows, terminal_tap_to_position_cursor, terminal_bell_notification (#753 bool, default true — post a notification naming the tab when a terminal rings BEL while Haven is backgrounded), terminal_font_size, terminal_horizontal_padding (#745: horizontal margin around the terminal grid in dp, 0..24 — the column count recalculates), terminal_color_scheme, terminal_auto_switch_scheme, terminal_light_color_scheme, terminal_dark_color_scheme, terminal_locale, terminal_inline_images (#583 inline-image consent: OFF / ASK (default) / ALWAYS — whether SSH programs' Kitty graphics / iTerm2 images render), mouse_input_enabled, terminal_right_click, terminal_tab_titles_follow_session (bool — tabs attached to tmux/zellij/screen show the session name instead of titles set by running programs; default true), mcp_tunnel_endpoint_profile_id, mcp_wireguard_enabled, mcp_lan_bind_enabled, mcp_wireguard_tunnel_config_id, usb_guest_exposure_enabled, gps_guest_exposure_enabled, connection_logging_enabled, verbose_logging_enabled, remap_low_ports (#300 proot launch toggle), share_storage_with_guest (#301 proot launch toggle), bind_android_system (#304 proot launch toggle), proot_dns_mode (#446 - system|public|custom), proot_dns_servers (custom nameservers), toolbar_layout (string — the terminal keyboard toolbar layout as JSON; see set_preference for the shape), custom_desktop_command (string — the Custom (X11) desktop's session command), update_check_enabled (bool — #578 opt-in launch-time update check; off by default, and inert on a copy not signed with the GitHub-release key), update_check_last_run_ms (long — epoch ms of the last launch-time check; the once-a-day throttle is measured from it), update_check_last_notified_version (string — the version the user was last notified about; blank if never). Returns { key, value } where value's type follows the preference's type (int / boolean / string). Colour-scheme values are TerminalColorScheme enum names.",
+            description = "Read a Haven user preference by key. Whitelisted keys: terminal_scrollback_rows, terminal_tap_to_position_cursor, terminal_bell_notification (#753 bool, default true — post a notification naming the tab when a terminal rings BEL while Haven is backgrounded), terminal_font_size, terminal_horizontal_padding (#745: horizontal margin around the terminal grid in dp, 0..24 — the column count recalculates), terminal_color_scheme, terminal_auto_switch_scheme, terminal_light_color_scheme, terminal_dark_color_scheme, terminal_locale, terminal_inline_images (#583 inline-image consent: OFF / ASK (default) / ALWAYS — whether SSH programs' Kitty graphics / iTerm2 images render), mouse_input_enabled, terminal_right_click, terminal_tab_titles_follow_session (bool — tabs attached to tmux/zellij/screen show the session name instead of titles set by running programs; default true), mcp_tunnel_endpoint_profile_id, mcp_wireguard_enabled, mcp_lan_bind_enabled, mcp_wireguard_tunnel_config_id, usb_guest_exposure_enabled, gps_guest_exposure_enabled, connection_logging_enabled, verbose_logging_enabled, remap_low_ports (#300 proot launch toggle), share_storage_with_guest (#301 proot launch toggle), bind_android_system (#304 proot launch toggle), proot_engine (#573 - proot|chroot-ng), proot_dns_mode (#446 - system|public|custom), proot_dns_servers (custom nameservers), toolbar_layout (string — the terminal keyboard toolbar layout as JSON; see set_preference for the shape), custom_desktop_command (string — the Custom (X11) desktop's session command), update_check_enabled (bool — #578 opt-in launch-time update check; off by default, and inert on a copy not signed with the GitHub-release key), update_check_last_run_ms (long — epoch ms of the last launch-time check; the once-a-day throttle is measured from it), update_check_last_notified_version (string — the version the user was last notified about; blank if never). Returns { key, value } where value's type follows the preference's type (int / boolean / string). Colour-scheme values are TerminalColorScheme enum names.",
             inputSchema = objectSchema {
                 string("key", "Preference key (see whitelist in description).", required = true)
             },
@@ -1041,7 +1046,7 @@ class McpTools private constructor(
         ) { args -> writeClipboard(args) },
 
         "set_preference" to ToolHandler(
-            description = "Write a Haven user preference. Whitelisted keys (and their types): terminal_scrollback_rows (int 100..25000), terminal_tap_to_position_cursor (bool), terminal_bell_notification (bool — #753, default true: post a notification naming the tab when a terminal rings BEL while Haven is backgrounded), terminal_font_size (int 8..32), terminal_horizontal_padding (int 0..24 dp — #745 horizontal margin around the terminal grid; the column count recalculates), mouse_input_enabled (bool), terminal_right_click (bool), terminal_tab_titles_follow_session (bool — tabs attached to tmux/zellij/screen show the session name instead of titles set by running programs), terminal_color_scheme (string — a TerminalColorScheme enum name, e.g. HAVEN, DRACULA, NORD, GRUVBOX; case-insensitive), terminal_auto_switch_scheme (bool — when true the active scheme follows system light/dark via the light/dark keys), terminal_light_color_scheme (string scheme name), terminal_dark_color_scheme (string scheme name), terminal_background_opacity (float 0.0..1.0 — below 1.0 the terminal renders over the device wallpaper), terminal_inline_images (string — TerminalInlineImages enum name #583: \"OFF\" renders nothing, \"ASK\" (default) shows a consent dialog per image, \"ALWAYS\" renders directly), terminal_locale (string, e.g. zh_CN.UTF-8 — exported to local terminal sessions as LANG/LC_ALL; glibc distros need the locale generated first), mcp_tunnel_endpoint_profile_id (string SSH profile id, empty to clear), mcp_wireguard_enabled (bool), mcp_lan_bind_enabled (bool — also bind the device Wi-Fi/LAN address for direct same-network reach), mcp_wireguard_tunnel_config_id (string tunnel config id the MCP server keeps up as its WG carrier, empty to clear), usb_guest_exposure_enabled (bool — master gate for usb_attach_to_guest), gps_guest_exposure_enabled (bool — master gate for attach_gps_to_guest), connection_logging_enabled (bool — audit-log connection lifecycle events to Settings → View connection log; off by default; enable before reproducing a connection issue, then read get_connection_log), verbose_logging_enabled (bool - per-session transport tracing, captured into each ConnectionLog entry's verboseLog; off by default. Needed AS WELL AS connection_logging_enabled: the RDP decode breakdown, the negotiated graphics capabilities and the discarded-bitmap detail exist nowhere else), gpu_use_venus (bool — experimental venus+zink GPU stack for accelerated desktops; off = virgl/virpipe), remap_low_ports (bool — #300 proot launch toggle: remap guest privileged ports +2000), share_storage_with_guest (bool — #301 proot launch toggle: mount /storage + /sdcard into the local guest; default on), bind_android_system (bool — #304 proot launch toggle: bind Android's read-only /system, /vendor, /apex, /product, /system_ext, /odm into the guest so it can run Android native binaries like getprop/toybox; default off, exposes device internals), proot_dns_mode (string - #446: which resolvers the local Linux guest gets in /etc/resolv.conf. \"system\" (default) uses the network's own resolvers, \"public\" uses Google 8.8.8.8 + Cloudflare 1.1.1.1 (the old hardcoded pair), \"custom\" uses proot_dns_servers. Networks that block outbound port 53 to anything but their own resolver make \"public\" fail silently - package installs just hang), proot_dns_servers (string - comma/space separated IP literals for \"custom\"; hostnames are rejected because resolv.conf has no way to resolve them), toolbar_layout (string — the terminal keyboard toolbar as JSON: a 2-element array of rows, each row an array whose elements are either a built-in key id string (\"esc\", \"paste\", \"text_input\", \"arrow_up\", \"ctrl\", \"home\", … — see ToolbarKey) or a custom-key object {\"label\":\"…\",\"send\":\"…\"}; set validates against ToolbarLayout and replaces the WHOLE layout, so get_preference it first, edit, and write it back — e.g. add \"text_input\" to a row to surface the floating-text-input key), custom_desktop_command (string — the Custom (X11) desktop session command run at its next start; the command IS the session: when it exits the desktop stops, and a command that dies at startup surfaces its output in the desktop row's error state), update_check_enabled (bool — #578: look for a newer GitHub release when Haven opens, at most once an hour. Off by default. Turning it ON is what arms the launch-time path; check_for_update runs a check right now regardless)), update_check_last_run_ms (long epoch ms — set to 0 to CLEAR the once-an-hour throttle), update_check_last_notified_version (string — set to \"\" to CLEAR the already-told-you dedup). Those two exist so the launch path can be exercised for real: clear whichever gate you are testing, restart Haven, and watch checkOnLaunch run. check_for_update deliberately cannot substitute — it runs the on-demand check, which posts no notification and touches neither gate. Takes effect on the next local session/command. Returns { key, value }.",
+            description = "Write a Haven user preference. Whitelisted keys (and their types): terminal_scrollback_rows (int 100..25000), terminal_tap_to_position_cursor (bool), terminal_bell_notification (bool — #753, default true: post a notification naming the tab when a terminal rings BEL while Haven is backgrounded), terminal_font_size (int 8..32), terminal_horizontal_padding (int 0..24 dp — #745 horizontal margin around the terminal grid; the column count recalculates), mouse_input_enabled (bool), terminal_right_click (bool), terminal_tab_titles_follow_session (bool — tabs attached to tmux/zellij/screen show the session name instead of titles set by running programs), terminal_color_scheme (string — a TerminalColorScheme enum name, e.g. HAVEN, DRACULA, NORD, GRUVBOX; case-insensitive), terminal_auto_switch_scheme (bool — when true the active scheme follows system light/dark via the light/dark keys), terminal_light_color_scheme (string scheme name), terminal_dark_color_scheme (string scheme name), terminal_background_opacity (float 0.0..1.0 — below 1.0 the terminal renders over the device wallpaper), terminal_inline_images (string — TerminalInlineImages enum name #583: \"OFF\" renders nothing, \"ASK\" (default) shows a consent dialog per image, \"ALWAYS\" renders directly), terminal_locale (string, e.g. zh_CN.UTF-8 — exported to local terminal sessions as LANG/LC_ALL; glibc distros need the locale generated first), mcp_tunnel_endpoint_profile_id (string SSH profile id, empty to clear), mcp_wireguard_enabled (bool), mcp_lan_bind_enabled (bool — also bind the device Wi-Fi/LAN address for direct same-network reach), mcp_wireguard_tunnel_config_id (string tunnel config id the MCP server keeps up as its WG carrier, empty to clear), usb_guest_exposure_enabled (bool — master gate for usb_attach_to_guest), gps_guest_exposure_enabled (bool — master gate for attach_gps_to_guest), connection_logging_enabled (bool — audit-log connection lifecycle events to Settings → View connection log; off by default; enable before reproducing a connection issue, then read get_connection_log), verbose_logging_enabled (bool - per-session transport tracing, captured into each ConnectionLog entry's verboseLog; off by default. Needed AS WELL AS connection_logging_enabled: the RDP decode breakdown, the negotiated graphics capabilities and the discarded-bitmap detail exist nowhere else), gpu_use_venus (bool — experimental venus+zink GPU stack for accelerated desktops; off = virgl/virpipe), remap_low_ports (bool — #300 proot launch toggle: remap guest privileged ports +2000), share_storage_with_guest (bool — #301 proot launch toggle: mount /storage + /sdcard into the local guest; default on), bind_android_system (bool — #304 proot launch toggle: bind Android's read-only /system, /vendor, /apex, /product, /system_ext, /odm into the guest so it can run Android native binaries like getprop/toybox; default off, exposes device internals), proot_engine (string - #573: container engine for arm64 local Linux sessions; \"proot\" (default) or \"chroot-ng\" (seccomp SIGSYS, ptrace-free; falls back to proot when foreign-arch qemu, remap_low_ports, or --net-policy is active)), proot_dns_mode (string - #446: which resolvers the local Linux guest gets in /etc/resolv.conf. \"system\" (default) uses the network's own resolvers, \"public\" uses Google 8.8.8.8 + Cloudflare 1.1.1.1 (the old hardcoded pair), \"custom\" uses proot_dns_servers. Networks that block outbound port 53 to anything but their own resolver make \"public\" fail silently - package installs just hang), proot_dns_servers (string - comma/space separated IP literals for \"custom\"; hostnames are rejected because resolv.conf has no way to resolve them), toolbar_layout (string — the terminal keyboard toolbar as JSON: a 2-element array of rows, each row an array whose elements are either a built-in key id string (\"esc\", \"paste\", \"text_input\", \"arrow_up\", \"ctrl\", \"home\", … — see ToolbarKey) or a custom-key object {\"label\":\"…\",\"send\":\"…\"}; set validates against ToolbarLayout and replaces the WHOLE layout, so get_preference it first, edit, and write it back — e.g. add \"text_input\" to a row to surface the floating-text-input key), custom_desktop_command (string — the Custom (X11) desktop session command run at its next start; the command IS the session: when it exits the desktop stops, and a command that dies at startup surfaces its output in the desktop row's error state), update_check_enabled (bool — #578: look for a newer GitHub release when Haven opens, at most once an hour. Off by default. Turning it ON is what arms the launch-time path; check_for_update runs a check right now regardless)), update_check_last_run_ms (long epoch ms — set to 0 to CLEAR the once-an-hour throttle), update_check_last_notified_version (string — set to \"\" to CLEAR the already-told-you dedup). Those two exist so the launch path can be exercised for real: clear whichever gate you are testing, restart Haven, and watch checkOnLaunch run. check_for_update deliberately cannot substitute — it runs the on-demand check, which posts no notification and touches neither gate. Takes effect on the next local session/command. Returns { key, value }.",
             inputSchema = objectSchema {
                 string("key", "Preference key (see whitelist).", required = true)
                 property("value", JSONObject().put("description", "New value. Type must match the key's type — int for the *_rows / *_size keys, bool for the rest."), required = true)
@@ -1214,9 +1219,11 @@ class McpTools private constructor(
         ) { args -> startAdbPairing(args) },
 
         "await_adb_pairing_code" to ToolHandler(
-            description = "Block until the user sends the 6-digit code from Haven's direct-reply pairing notification, then return it with a ready-to-run `adb pair <host>:<port> <code>` (#575). Pair this with start_adb_pairing: that verb opens the dialog, finds the ephemeral pairing port and posts the prompt; this one collects the reply, and the agent runs the resulting command from the workstation that wants adb — Haven cannot run it itself (that needs SPAKE2-EE over TLS-PSK). Returns { code, host, port, pairCommand }. Errors if no pairing is in progress or the wait elapsed; the port dies with the dialog, so restart the flow rather than retrying a stale one.",
+            description = "Block until the user sends the 6-digit code from Haven's direct-reply pairing notification, then complete Android's SPAKE2+/TLS-1.3 Wireless Debugging pairing handshake in-app (#575) and/or return a ready-to-run `adb pair <host>:<port> <code>`. Pair this with start_adb_pairing: when `pairInApp` is true (default), Haven pairs its own persistent ADB key against `_adb-tls-pairing._tcp` so non-root `expose_adb` works without Shizuku root; pass `publicKey` (`~/.android/adbkey.pub`) to register a workstation key instead, or set `pairInApp` to false to leave the one-shot pairing port untouched for a LAN `adb pair` command. Returns `{ code, host, port, pairCommand, pairedInApp, guid?, pairedKeyTarget?, pairError? }`.",
             inputSchema = objectSchema {
                 integer("timeoutMs", "How long to wait for the code, 1000-300000. Default 120000 — this is a human typing.")
+                boolean("pairInApp", "Complete the SPAKE2+/TLS-1.3 pairing handshake on-device (default true). Set false to leave the ephemeral pairing port unconsumed so a LAN workstation can run pairCommand directly.")
+                string("publicKey", "Optional workstation ~/.android/adbkey.pub line to register with adbd instead of Haven's internal bridge key when pairInApp is true.")
             },
             consentLevel = ConsentLevel.NEVER,
         ) { args -> awaitAdbPairingCode(args) },
@@ -1240,7 +1247,7 @@ class McpTools private constructor(
         ) { args -> readLogcat(args) },
 
         "expose_adb" to ToolHandler(
-            description = "Make the device's adb reachable from the workstation over 4G even with a system VPN active. Enables classic adb-over-TCP on a loopback port (default 5555) via Shizuku — no per-host pairing — then reverse-forwards 127.0.0.1:<port> over the existing MCP tunnel. Because the only phone-side hop is loopback (which Android never routes through a VpnService), adb stays reachable through any VPN. On the workstation: `adb connect localhost:<port>`. Requires Shizuku running + granted. Use install_apk_from_url/_from_backend for installs that don't need a full adb connection. Tear down with unexpose_adb.",
+            description = "Make the device's adb reachable from the workstation over 4G even with a system VPN active. Tries classic adb-over-TCP (`service.adb.tcp.port`, default 5555) via Shizuku first; when Shizuku is unavailable or running without root, falls back to a local non-root TLS 1.3 bridge (`127.0.0.1:<port>` -> `_adb-tls-connect._tcp`) authenticated with Haven's paired ADB key (#575), then reverse-forwards `127.0.0.1:<port>` over the existing MCP tunnel. On the workstation: `adb connect localhost:<port>`. Tear down with unexpose_adb.",
             inputSchema = objectSchema {
                 integer("port", "Loopback adb-over-TCP port to expose (default 5555).")
             },
@@ -3190,6 +3197,7 @@ class McpTools private constructor(
         "remap_low_ports",
         "share_storage_with_guest",
         "bind_android_system",
+        "proot_engine",
         // #446: which resolvers the local guest's /etc/resolv.conf gets. Drivable
         // so a DNS-blocked network can be diagnosed and fixed without the GUI.
         "proot_dns_mode",
@@ -3283,6 +3291,7 @@ class McpTools private constructor(
             "remap_low_ports" -> prootManager.remapLowPorts
             "share_storage_with_guest" -> prootManager.shareStorageWithGuest
             "bind_android_system" -> prootManager.bindAndroidSystem
+            "proot_engine" -> prootManager.guestEngine.id
             "proot_dns_mode" -> prootManager.dnsMode.id
             "proot_dns_servers" -> prootManager.dnsServers
             "custom_desktop_command" -> preferencesRepository.customDesktopCommand.first()
@@ -3425,27 +3434,8 @@ class McpTools private constructor(
             "remap_low_ports" -> prootManager.setRemapLowPorts(coerceBool())
             "share_storage_with_guest" -> prootManager.setShareStorageWithGuest(coerceBool())
             "bind_android_system" -> prootManager.setBindAndroidSystem(coerceBool())
-            "proot_dns_mode" -> {
-                val raw = (rawValue as? String)?.trim()
-                    ?: throw McpError(-32602, "value must be one of system|public|custom for $key")
-                val mode = sh.haven.core.local.ProotDnsMode.entries.firstOrNull { it.id.equals(raw, ignoreCase = true) }
-                    ?: throw McpError(-32602, "Invalid DNS mode \"$raw\" for $key (expected system, public or custom)")
-                prootManager.setDnsMode(mode)
-            }
-            "proot_dns_servers" -> {
-                val raw = (rawValue as? String)
-                    ?: throw McpError(-32602, "value must be a string of IP or IP:port literals for $key")
-                // Reject early rather than writing a resolv.conf that silently never
-                // resolves - a hostname here cannot be resolved (#446, #838).
-                if (
-                    raw.isNotBlank() &&
-                    (sh.haven.core.local.ProotDns.invalidTokens(raw).isNotEmpty() ||
-                        sh.haven.core.local.ProotDns.parseServers(raw).isEmpty())
-                ) {
-                    throw McpError(-32602, "Invalid DNS server entry in \"$raw\" for $key (expected IP or IP:port literals)")
-                }
-                prootManager.setDnsServers(raw)
-            }
+            "proot_engine", "proot_dns_mode", "proot_dns_servers" ->
+                applyProotStringPreference(prootManager, key, rawValue)
             "custom_desktop_command" -> {
                 val raw = (rawValue as? String)
                     ?: throw McpError(-32602, "value must be a string for $key")
@@ -4881,15 +4871,16 @@ class McpTools private constructor(
     @Volatile
     private var pendingPairingPrompt: AdbPairingPrompt? = null
 
-    /** Await the code typed into the on-device overlay (#575). */
+    /** Await the code typed into the on-device overlay and optionally pair in-app (#575). */
     private suspend fun awaitAdbPairingCode(args: JSONObject): JSONObject {
         val latch = pendingPairingCode
             ?: throw McpError(-32603, "No pairing in progress — call start_adb_pairing first.")
         val timeoutMs = args.optLong("timeoutMs", 120_000L).coerceIn(1_000L, 300_000L)
+        val pairInApp = args.optBoolean("pairInApp", true)
+        val requestedPubKey = args.optString("publicKey", "").trim().ifEmpty { null }
         val code = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
             runCatching { latch.await() }.getOrNull()
         } ?: run {
-            // A reply box for a dead port is worse than none.
             pendingPairingPrompt?.let { it.unregister(); it.cancel() }
             pendingPairingPrompt = null
             throw McpError(
@@ -4903,14 +4894,7 @@ class McpTools private constructor(
         pendingPairingEndpoint = null
         pendingPairingPrompt?.let { it.unregister(); it.cancel() }
         pendingPairingPrompt = null
-        return JSONObject().apply {
-            put("code", code)
-            if (endpoint != null) {
-                put("host", endpoint.host)
-                put("port", endpoint.port)
-                put("pairCommand", "adb pair ${endpoint.host}:${endpoint.port} $code")
-            }
-        }
+        return adbBridgeController.buildPairingCodeResponse(code, endpoint, pairInApp, requestedPubKey)
     }
 
     /**
@@ -4985,23 +4969,24 @@ class McpTools private constructor(
         if (port < 1024 || port > 65535) {
             throw McpError(-32602, "port must be between 1024 and 65535")
         }
-        enableAdbTcpipViaShizuku(port)
+        val activation = adbBridgeController.activateLocalAdbEndpoint(port, ::enableAdbTcpipViaShizuku)
         preferencesRepository.setMcpAdbExposedPort(port)
         val bound = mcpTunnelManager.exposeAdbPort(port)
         JSONObject().apply {
-            put("method", "tcpip")
+            put("method", activation.method)
             put("adbPort", port)
             put("activated", bound)
             put("connect", "adb connect localhost:$port")
+            activation.wirelessEndpoint?.let { put("wirelessEndpoint", it) }
             put(
                 "note",
                 if (bound) {
-                    "adbd exposed on the MCP tunnel endpoint (127.0.0.1:$port). On the " +
-                        "workstation run: adb connect localhost:$port — the loopback hop " +
+                    "adbd exposed on the MCP tunnel endpoint (127.0.0.1:$port, method=${activation.method}). " +
+                        "On the workstation run: adb connect localhost:$port — the loopback hop " +
                         "bypasses any system VPN. Verify with `adb devices`."
                 } else {
-                    "adb enabled and armed, but the MCP tunnel is not up right now — the " +
-                        "forward binds automatically once the tunnel connects, then: " +
+                    "adb enabled (${activation.method}) and armed, but the MCP tunnel is not up right now — " +
+                        "the forward binds automatically once the tunnel connects, then: " +
                         "adb connect localhost:$port."
                 },
             )
@@ -5010,18 +4995,20 @@ class McpTools private constructor(
 
     /**
      * Reverse of [exposeAdb]: drop the reverse forward, clear the persisted port,
-     * and return adbd to USB-only. Best-effort on the Shizuku step so the more
-     * important security action (removing the forward) always completes.
+     * tear down any local Wireless Debugging TLS bridge, and return adbd to USB-only.
      */
     private suspend fun unexposeAdb(): JSONObject = withContext(Dispatchers.IO) {
         val port = preferencesRepository.mcpAdbExposedPort.first() ?: DEFAULT_ADB_PORT
         mcpTunnelManager.unexposeAdbPort(port)
         preferencesRepository.setMcpAdbExposedPort(null)
+        val stoppedWirelessBridge = adbBridgeController.tlsBridge.isRunning
+        adbBridgeController.tlsBridge.stop()
         disableAdbTcpipViaShizuku()
         JSONObject().apply {
             put("disabled", true)
             put("adbPort", port)
-            put("note", "Removed the adb reverse forward and disabled adb-over-TCP on the device.")
+            put("stoppedWirelessBridge", stoppedWirelessBridge)
+            put("note", "Removed the adb reverse forward and stopped device adb exposure.")
         }
     }
 
@@ -5131,7 +5118,10 @@ class McpTools private constructor(
         // adb → workstation (reverse tunnel)
         val adbPort = preferencesRepository.mcpAdbExposedPort.first()
         if (adbPort != null) {
-            add("adb", "adb", "workstation", "reverse-tunnel", "active") { put("port", adbPort) }
+            add("adb", "adb", "workstation", "reverse-tunnel", "active") {
+                put("port", adbPort)
+                put("mode", if (adbBridgeController.tlsBridge.isRunning) "wireless-tls-bridge" else "tcpip")
+            }
         }
 
         // GPS broker (bridges.md GPS row): the continuous log feeds the

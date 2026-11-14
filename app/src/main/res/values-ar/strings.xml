@@ -215,6 +215,10 @@
     <string name="app_system_vm_import_source">رابط الصورة أو مسار على الجهاز</string>
     <string name="app_system_vm_import_arch">معمارية النظام الضيف</string>
     <string name="app_system_vm_import_arch_hint">يجب أن تطابق الصورة — الهدف الخاطئ لا يُظهر خطأً، بل لا يُقلِع أبدًا.</string>
+    <string name="app_system_vm_upgrade_qemu11">ترقية QEMU 11 + Virgl</string>
+    <string name="app_system_vm_import_gpu">تسريع معالج الرسوميات (GPU)</string>
+    <string name="app_system_vm_import_uefi">برنامج UEFI الثابت (OVMF)</string>
+    <string name="app_system_vm_import_tpm2">TPM 2.0 (swtpm، Windows 11)</string>
 
     <!-- Desktop manager: desktops inside the UML guest (docs/plans/uml-dm.md) -->
     <string name="app_uml_desktop_title">سطح مكتب ضيف UML</string>
@@ -408,4 +412,12 @@
     <string name="app_desktop_dns_custom_err_invalid">أدخل عناوين IP أو IP:port (مثل 1.1.1.1 أو 127.0.0.1:5400).</string>
     <string name="app_desktop_routing_block_direct_title">حظر حركة المرور خارج الوكيل</string>
     <string name="app_desktop_routing_block_direct_description">يحظر الاتصالات الصادرة المباشرة واستعلامات DNS داخل PRoot لمنع البرامج من تجاوز الوكيل النشط.</string>
+    <string name="app_guest_services_title">خدمات الضيف</string>
+    <string name="app_guest_services_description">خوادم تعمل في الخلفية داخل توزيعة Linux النشطة على الواجهة المحلية.</string>
+    <string name="app_guest_services_running">قيد التشغيل · 127.0.0.1:%1$d</string>
+    <string name="app_guest_services_stopped">متوقف · 127.0.0.1:%1$d</string>
+    <string name="app_desktop_engine_title">محرك الحاوية</string>
+    <string name="app_desktop_engine_description">المحرك المستخدم لأصداف وسطح مكتب arm64 الأصليين. يعود تلقائياً إلى PRoot عند تفعيل محاكاة QEMU أو إعادة توجيه المنافذ المنخفضة أو حظر الاتصالات المباشرة.</string>
+    <string name="app_desktop_engine_proot">PRoot (افتراضي)</string>
+    <string name="app_desktop_engine_chroot_ng">chroot-ng (seccomp، arm64)</string>
 </resources>

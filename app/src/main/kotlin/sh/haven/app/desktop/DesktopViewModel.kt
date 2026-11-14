@@ -120,6 +120,8 @@ class DesktopViewModel @Inject constructor(
 
     private val prootManager: ProotManager get() = localSessionManager.prootManager
     private val desktopManager: DesktopManager get() = localSessionManager.desktopManager
+    private val guestServiceManager: sh.haven.core.local.GuestServiceManager
+        get() = localSessionManager.guestServiceManager
 
     val activeDistroId: StateFlow<String> get() = prootManager.activeDistroIdFlow
 
@@ -178,6 +180,17 @@ class DesktopViewModel @Inject constructor(
 
     fun setDnsMode(mode: sh.haven.core.local.ProotDnsMode) {
         prootManager.setDnsMode(mode)
+    }
+
+    /** #573: opt-in arm64 seccomp SIGSYS container engine vs default PRoot. Pass-through. */
+    val guestEngine: StateFlow<sh.haven.core.local.ProotManager.GuestEngine>
+        get() = prootManager.guestEngineFlow
+
+    val chrootNgAvailable: Boolean
+        get() = prootManager.isChrootNgAvailable
+
+    fun setGuestEngine(engine: sh.haven.core.local.ProotManager.GuestEngine) {
+        prootManager.setGuestEngine(engine)
     }
 
     /** #446: custom nameservers, used when [dnsMode] is CUSTOM. Pass-through. */
@@ -1039,6 +1052,103 @@ class DesktopViewModel @Inject constructor(
         }
     }
 
+    // --- Guest services & one-tap service presets (#734) ---
+
+    val guestServices: StateFlow<List<sh.haven.core.local.GuestServiceManager.GuestServiceInstance>> =
+        combine(
+            guestServiceManager.services,
+            guestServiceManager.registryRevision,
+            prootManager.activeDistroIdFlow,
+        ) { live, _, _ ->
+            guestServiceManager.registered().map { spec ->
+                live[spec.id] ?: sh.haven.core.local.GuestServiceManager.GuestServiceInstance(
+                    spec = spec,
+                    state = sh.haven.core.local.GuestServiceManager.ServiceState.STOPPED,
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _installingServicePresetIds = MutableStateFlow<Set<String>>(emptySet())
+    val installingServicePresetIds: StateFlow<Set<String>> = _installingServicePresetIds.asStateFlow()
+
+    fun installServicePreset(preset: sh.haven.core.local.proot.GuestServicePreset) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!prootManager.isRootfsInstalled) {
+                _userMessages.emit("Install a Linux distro first to set up ${preset.label}")
+                return@launch
+            }
+            val distro = prootManager.activeDistro
+            val pkgs = preset.packages[distro.family]
+            if (pkgs == null) {
+                _userMessages.emit("${preset.label} is not packaged for ${distro.label} (${distro.family})")
+                return@launch
+            }
+            if (preset.id in _installingServicePresetIds.value) return@launch
+            _installingServicePresetIds.update { it + preset.id }
+            try {
+                _userMessages.emit("Setting up ${preset.label}…")
+                val script = sh.haven.core.local.proot.buildServicePresetInstallScript(
+                    preset = preset,
+                    pkgs = pkgs,
+                    family = distro.family,
+                )
+                val proc = prootManager.startCommandInProot(script)
+                val tail = ArrayDeque<String>(16)
+                proc.inputStream.bufferedReader().forEachLine { line ->
+                    if (tail.size >= 16) tail.removeFirst()
+                    tail.addLast(line)
+                }
+                val code = proc.waitFor()
+                if (code != 0) {
+                    val lastLine = tail.lastOrNull { it.isNotBlank() } ?: "exit $code"
+                    _userMessages.emit("Couldn't set up ${preset.label}: $lastLine")
+                    return@launch
+                }
+                if (!preset.isBinaryPresent(prootManager.activeRootfsDir)) {
+                    _userMessages.emit("Couldn't set up ${preset.label}: server binary missing after install")
+                    return@launch
+                }
+                guestServiceManager.register(
+                    sh.haven.core.local.GuestServiceManager.GuestServiceSpec(
+                        id = preset.id,
+                        label = preset.label,
+                        command = preset.serviceCommand,
+                        port = preset.port,
+                        autostart = preset.autostart,
+                    ),
+                )
+                guestServiceManager.start(preset.id)
+                _userMessages.emit("${preset.label} running on 127.0.0.1:${preset.port}")
+            } catch (e: Exception) {
+                Log.w(TAG, "installServicePreset(${preset.id}) failed", e)
+                _userMessages.emit("Couldn't set up ${preset.label}: ${e.message}")
+            } finally {
+                _installingServicePresetIds.update { it - preset.id }
+            }
+        }
+    }
+
+    fun startGuestService(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { guestServiceManager.start(id) }
+                .onFailure { _userMessages.emit("Couldn't start service: ${it.message}") }
+        }
+    }
+
+    fun stopGuestService(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { guestServiceManager.stop(id) }
+                .onFailure { _userMessages.emit("Couldn't stop service: ${it.message}") }
+        }
+    }
+
+    fun deleteGuestService(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { guestServiceManager.unregister(id) }
+                .onFailure { _userMessages.emit("Couldn't remove service: ${it.message}") }
+        }
+    }
+
     // --- Installed-app launcher ("Browse installed apps", xfce4-style menu) ---
 
     private val _installedApps = MutableStateFlow<AppScanResult?>(null)
@@ -1518,6 +1628,15 @@ class DesktopViewModel @Inject constructor(
     private val _systemVmImportArch = MutableStateFlow(sh.haven.core.local.VmArch.X86_64)
     val systemVmImportArch: StateFlow<sh.haven.core.local.VmArch> = _systemVmImportArch.asStateFlow()
 
+    private val _systemVmImportGpuMode = MutableStateFlow(sh.haven.core.local.VmGpuMode.STD)
+    val systemVmImportGpuMode: StateFlow<sh.haven.core.local.VmGpuMode> = _systemVmImportGpuMode.asStateFlow()
+
+    private val _systemVmImportUefi = MutableStateFlow(false)
+    val systemVmImportUefi: StateFlow<Boolean> = _systemVmImportUefi.asStateFlow()
+
+    private val _systemVmImportTpm2 = MutableStateFlow(false)
+    val systemVmImportTpm2: StateFlow<Boolean> = _systemVmImportTpm2.asStateFlow()
+
     // --- Desktop-manager dialog drafts -------------------------------------
     //
     // Same reason as the system-VM import draft below, and the same rule: flag
@@ -1710,12 +1829,21 @@ class DesktopViewModel @Inject constructor(
 
     fun setSystemVmImportArch(value: sh.haven.core.local.VmArch) { _systemVmImportArch.value = value }
 
+    fun setSystemVmImportGpuMode(value: sh.haven.core.local.VmGpuMode) { _systemVmImportGpuMode.value = value }
+
+    fun setSystemVmImportUefi(value: Boolean) { _systemVmImportUefi.value = value }
+
+    fun setSystemVmImportTpm2(value: Boolean) { _systemVmImportTpm2.value = value }
+
     /** Closes the dialog and clears the draft, so the next open starts clean rather than resurrecting a cancelled one. */
     fun dismissSystemVmImport() {
         _showSystemVmImport.value = false
         _systemVmImportLabel.value = ""
         _systemVmImportSource.value = ""
         _systemVmImportArch.value = sh.haven.core.local.VmArch.X86_64
+        _systemVmImportGpuMode.value = sh.haven.core.local.VmGpuMode.STD
+        _systemVmImportUefi.value = false
+        _systemVmImportTpm2.value = false
     }
 
     init {
@@ -1732,7 +1860,14 @@ class DesktopViewModel @Inject constructor(
      * with it, since a qcow2 doesn't say and the boot silently hangs on the
      * wrong target.
      */
-    fun importSystemVmImage(label: String, source: String, arch: sh.haven.core.local.VmArch) {
+    fun importSystemVmImage(
+        label: String,
+        source: String,
+        arch: sh.haven.core.local.VmArch,
+        gpuMode: sh.haven.core.local.VmGpuMode = sh.haven.core.local.VmGpuMode.STD,
+        uefi: Boolean = false,
+        tpm2: Boolean = false,
+    ) {
         val id = label.lowercase().replace(Regex("[^a-z0-9._-]+"), "-").trim('-')
         if (id.isEmpty()) {
             viewModelScope.launch { _userMessages.emit("Give the image a name (letters/digits).") }
@@ -1741,11 +1876,34 @@ class DesktopViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _systemVmBusy.value = true
             try {
-                systemVmManager.importImage(id, label.ifBlank { id }, source.trim(), arch = arch)
+                systemVmManager.importImage(
+                    id = id,
+                    label = label.ifBlank { id },
+                    source = source.trim(),
+                    arch = arch,
+                    gpuMode = gpuMode,
+                    uefi = uefi,
+                    tpm2 = tpm2,
+                )
                 refreshSystemVmImages()
                 _userMessages.emit("Imported \"$label\".")
             } catch (e: Exception) {
                 _userMessages.emit(e.message ?: "Couldn't import the image")
+            } finally {
+                _systemVmBusy.value = false
+            }
+        }
+    }
+
+    /** Build and install QEMU 11.1.3 + virglrenderer (Venus socket bridge) into `/opt/qemu11` in the active distro (#829). */
+    fun upgradeSystemVmQemu11() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _systemVmBusy.value = true
+            try {
+                val status = systemVmManager.upgradeQemu11()
+                _userMessages.emit("Installed ${status.qemuVersion ?: "QEMU 11"} + virgl in /opt/qemu11.")
+            } catch (e: Exception) {
+                _userMessages.emit(e.message ?: "Couldn't upgrade QEMU 11 + virgl")
             } finally {
                 _systemVmBusy.value = false
             }

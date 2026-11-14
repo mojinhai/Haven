@@ -5,6 +5,46 @@ the corresponding GitHub Release; a release can't ship without its section
 (enforced by `scripts/check-changelog.sh` in CI). The GitHub "Full Changelog"
 compare link is appended automatically — don't add it here.
 
+## v5.94.47
+
+- Add unprivileged ICMP and ICMPv6 Echo Request port knocking (`<size>/icmp`, `<size>x<count>:icmp`, `icmp+h`, and `icmp+ip`) across SSH, RDP, VNC, SPICE, GLKVM, SMB, and MCP tools (#846, thanks @NeshikRUS).
+- Build `chroot-ng` 1.6.0 (`libchrootng.so`) from source on `arm64-v8a` with OPlus UID-probe, ART signal-mask, and `sudo` stat-remap patches as an opt-in seccomp `SIGSYS` container engine under `Desktop -> Manage -> Options & mounts` and MCP `proot_engine` (#573).
+
+## v5.94.46
+
+- Hold `/api/ws?stream=1` open with periodic `ping` frames during GLKVM and PiKVM sessions so `kvmd` wakes idle `ustreamer` instances without needing a browser tab open, retry cold-start `502`/`503`/`504` snapshot responses, and send `POST /api/streamer/set_params?gl_webrtc=0` once when GL.iNet `gl_webrtc=1` adaptive mode stalls `/streamer/snapshot` (#845, thanks @skug67).
+
+## v5.94.45
+
+- Add QEMU 11.1.3 and Virgl/Venus GPU acceleration (`gpuMode = std | virgl | venus` via Android's native `libvirgl_render_server.so` socket), a PRoot `EGL_PLATFORM_SURFACELESS_MESA` + `EGL_PBUFFER_BIT` patch for `-display egl-headless`, OVMF UEFI `pflash` firmware, and `swtpm` TPM 2.0 support across System VM import/boot, `Desktop -> Manage -> System VM`, and MCP tools (`upgrade_system_vm_qemu`, `import_system_vm_image`, `start_system_vm`) (#829, thanks @pixel4696).
+- Add a 100 ms initial hold delay before latched `Swipe` selection activates, widen vertical command-line history swipe steps to `48 dp`, and widen horizontal character-cursor swipe steps to `18 dp` (#736, thanks @excurso).
+
+## v5.94.44
+
+- Execute tools from external streamable-HTTP MCP (`2025-06-18`) servers during OpenAI, Ollama, Anthropic, and Gemini chat completions, with encrypted `Bearer` token storage, portable decrypted backup export and re-encrypted import, an `/mcp` slash command, and a bounded 8-round tool execution loop (#807, thanks @n1x0l4s).
+- Rename the `LOCAL` transport dropdown label from `Local Shell (PRoot)` to `Local Shell` and preserve Android's inherited `PATH` alongside `/system/xbin`, `/sbin`, `/su/bin`, and `/debug_ramdisk` in `Android` shell mode (#842, thanks @zol-c).
+- Sync `wayland-android/virglrenderer` with 32 upstream `virgl/virglrenderer` commits covering guest integer-overflow bounds checks, Venus `vkr` SHM-fd resource allocation, and GLES `glReadPixels` cursor readback (#829, thanks @pixel4696).
+
+## v5.94.43
+
+- Add a `Guest Services` card under `Desktop` with Start, Stop, and Remove controls plus a one-tap MariaDB `127.0.0.1:3306` preset across Alpine, Debian/Ubuntu, Arch, and Void (`--no-defaults --user=root --innodb-use-native-aio=0` and `/root/.my.cnf`) (#734, thanks @sugerpersion).
+- Add on-device ADB wireless pairing (`Ed25519` SPAKE2 and TLS 1.3 `PeerInfo` exchange) to `await_adb_pairing_code` and a non-root mTLS loopback bridge fallback in `expose_adb` (#575).
+
+## v5.94.42
+
+- Add a width-gated two-pane horizontal terminal split (`>= 600 dp`) via the tab context menu (`Split with...`) and tab-strip unsplit control, with independent PTY geometries, a draggable `0.2`..`0.8` divider (double-tap to reset to `50/50`), tap-to-focus IME routing, per-pane color schemes, and auto-collapse below `600 dp` or when either split tab closes (#141).
+
+## v5.94.41
+
+- Re-wrap soft-wrapped scrollback lines on terminal resize, split top-straddling wrapped chains cleanly across scrollback and the visible grid instead of dropping continuation rows, coalesce restored scrollback tails when widening, and wrap double-width CJK and emoji glyphs before `cols - 1` (#520, thanks @frebib).
+- Support `armeabi-v7a` and `-PtargetAbi` filtering in `buildSpiceNative` for source-built SPICE native packaging (#493).
+
+## v5.94.40
+
+- Add per-distro default login user settings under `Desktop -> Manage`, provisioning the configured guest user and `sudoers` entry on terminal or desktop launch while preserving global user defaults (#567, thanks @sugerpersion).
+- Support stock PiKVM (`kvmd`) devices on `GLKVM / PiKVM` profiles alongside GL.iNet Comet, adding `auth_token` session cookies, `/api/auth/check` unauthenticated setups, `/api/streamer` resolution state, and `/api/streamer/snapshot` fallback.
+- Step single-touch latched `Swipe` drags continuously by one terminal row height (`charHeight`) on both vertical and horizontal axes without scroll-on-hold, and gate scroll-on-hold behind a double-touch gesture (#736, thanks @excurso).
+
 ## v5.94.39
 
 - Migrate `archlinux-x86_64` PRoot guests off the broken `mirror.rackspace.com` default (`HTTP 403`) onto `geo.mirror.pkgbuild.com` with `fastly.mirror.pkgbuild.com` fallback, apply mirror configuration across foreign-arch distros and interactive/non-interactive PRoot sessions, and fail fast if keyring sync fails before system upgrades (#840, thanks @NAZY-OS).

@@ -93,6 +93,7 @@ import sh.haven.core.local.ProotRoutingConfig
 import sh.haven.core.local.ProotRoutingMode
 import sh.haven.core.local.SystemVmManager
 import sh.haven.core.local.VmArch
+import sh.haven.core.local.VmGpuMode
 import sh.haven.core.local.proot.Compatibility
 import sh.haven.core.local.proot.Distro
 import sh.haven.core.local.proot.DistroCatalog
@@ -153,6 +154,8 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
     val appWindowDefs by viewModel.appWindowDefs.collectAsState()
     val launchingIds by viewModel.launchingIds.collectAsState()
     val installingPackIds by viewModel.installingPackIds.collectAsState()
+    val guestServices by viewModel.guestServices.collectAsState()
+    val installingServicePresetIds by viewModel.installingServicePresetIds.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
     val scanningApps by viewModel.scanningApps.collectAsState()
     val defaultResolution by viewModel.appWindowDefaultResolution.collectAsState()
@@ -170,6 +173,9 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
     val importVmLabel by viewModel.systemVmImportLabel.collectAsState()
     val importVmSource by viewModel.systemVmImportSource.collectAsState()
     val importVmArch by viewModel.systemVmImportArch.collectAsState()
+    val importVmGpuMode by viewModel.systemVmImportGpuMode.collectAsState()
+    val importVmUefi by viewModel.systemVmImportUefi.collectAsState()
+    val importVmTpm2 by viewModel.systemVmImportTpm2.collectAsState()
 
     val backendPref by viewModel.primaryDesktopBackendPref.collectAsState()
     val quick = (backendPref.ifEmpty { if (viewModel.umlAvailable) "quick" else "full" }) == "quick"
@@ -279,6 +285,24 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             onSetDefaultScale = { viewModel.setAppWindowDefaultScale(it) },
         )
 
+        if (!quick || !viewModel.umlAvailable) {
+            val availableServicePresets = remember(activeFamilyForPacks, guestServices) {
+                sh.haven.core.local.proot.GuestServiceCatalog.PRESETS.filter { preset ->
+                    (activeFamilyForPacks == null || preset.packages.containsKey(activeFamilyForPacks)) &&
+                        guestServices.none { it.spec.id == preset.id }
+                }
+            }
+            GuestServicesSection(
+                services = guestServices,
+                availablePresets = availableServicePresets,
+                installingPresetIds = installingServicePresetIds,
+                onInstallPreset = { viewModel.installServicePreset(it) },
+                onStart = { viewModel.startGuestService(it) },
+                onStop = { viewModel.stopGuestService(it) },
+                onDelete = { viewModel.deleteGuestService(it) },
+            )
+        }
+
         // The QEMU system VM stays last: it's the slowest, most niche path
         // (TCG boot, one at a time) and promoting it would compete with the
         // two desktop backends for the same attention.
@@ -287,6 +311,7 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             images = systemVmImages,
             busy = systemVmBusy,
             onImport = { viewModel.openSystemVmImport() },
+            onUpgradeQemu11 = { viewModel.upgradeSystemVmQemu11() },
             onStart = { viewModel.startSystemVm(it.id) },
             onStop = { viewModel.stopSystemVm() },
             onDelete = { viewModel.deleteSystemVmImage(it.id) },
@@ -298,11 +323,24 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             label = importVmLabel,
             source = importVmSource,
             arch = importVmArch,
+            gpuMode = importVmGpuMode,
+            uefi = importVmUefi,
+            tpm2 = importVmTpm2,
             onLabelChange = { viewModel.setSystemVmImportLabel(it) },
             onSourceChange = { viewModel.setSystemVmImportSource(it) },
             onArchChange = { viewModel.setSystemVmImportArch(it) },
+            onGpuModeChange = { viewModel.setSystemVmImportGpuMode(it) },
+            onUefiChange = { viewModel.setSystemVmImportUefi(it) },
+            onTpm2Change = { viewModel.setSystemVmImportTpm2(it) },
             onImport = {
-                viewModel.importSystemVmImage(importVmLabel.trim(), importVmSource.trim(), importVmArch)
+                viewModel.importSystemVmImage(
+                    label = importVmLabel.trim(),
+                    source = importVmSource.trim(),
+                    arch = importVmArch,
+                    gpuMode = importVmGpuMode,
+                    uefi = importVmUefi,
+                    tpm2 = importVmTpm2,
+                )
                 viewModel.dismissSystemVmImport()
             },
             onDismiss = { viewModel.dismissSystemVmImport() },
@@ -601,6 +639,129 @@ private fun AppWindowsSection(
     }
 }
 
+@Composable
+private fun GuestServicesSection(
+    services: List<sh.haven.core.local.GuestServiceManager.GuestServiceInstance>,
+    availablePresets: List<sh.haven.core.local.proot.GuestServicePreset>,
+    installingPresetIds: Set<String>,
+    onInstallPreset: (sh.haven.core.local.proot.GuestServicePreset) -> Unit,
+    onStart: (String) -> Unit,
+    onStop: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    if (services.isEmpty() && availablePresets.isEmpty()) return
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(stringResource(AppR.string.app_guest_services_title), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(AppR.string.app_guest_services_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            services.forEach { inst ->
+                val spec = inst.spec
+                val statusText = when (inst.state) {
+                    sh.haven.core.local.GuestServiceManager.ServiceState.RUNNING ->
+                        if (spec.port > 0) stringResource(AppR.string.app_guest_services_running, spec.port)
+                        else stringResource(AppR.string.app_uml_desktop_installed)
+                    sh.haven.core.local.GuestServiceManager.ServiceState.STARTING ->
+                        stringResource(AppR.string.app_system_vm_starting)
+                    sh.haven.core.local.GuestServiceManager.ServiceState.ERROR ->
+                        inst.errorMessage?.takeIf { it.isNotBlank() } ?: stringResource(AppR.string.app_uml_desktop_failed)
+                    sh.haven.core.local.GuestServiceManager.ServiceState.STOPPED ->
+                        if (spec.port > 0) stringResource(AppR.string.app_guest_services_stopped, spec.port)
+                        else stringResource(AppR.string.app_uml_desktop_installed)
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(spec.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                        Text(
+                            statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (inst.state == sh.haven.core.local.GuestServiceManager.ServiceState.ERROR) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    when (inst.state) {
+                        sh.haven.core.local.GuestServiceManager.ServiceState.STARTING -> {
+                            Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                        }
+                        sh.haven.core.local.GuestServiceManager.ServiceState.RUNNING -> {
+                            TextButton(onClick = { onStop(spec.id) }) {
+                                Text(stringResource(AppR.string.app_system_vm_stop))
+                            }
+                        }
+                        else -> {
+                            IconButton(onClick = { onStart(spec.id) }) {
+                                Icon(
+                                    Icons.Filled.PlayArrow,
+                                    contentDescription = stringResource(AppR.string.app_system_vm_start_cd, spec.label),
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = { onDelete(spec.id) }) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = stringResource(AppR.string.app_system_vm_delete_cd, spec.label),
+                        )
+                    }
+                }
+                HorizontalDivider()
+            }
+
+            availablePresets.forEach { preset ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(preset.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                        Text(
+                            preset.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (preset.id in installingPresetIds) {
+                        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        }
+                    } else {
+                        IconButton(onClick = { onInstallPreset(preset) }) {
+                            Icon(Icons.Filled.Download, contentDescription = preset.label)
+                        }
+                    }
+                }
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
 /**
  * "System VM" section (#326): boots a full QEMU x86_64 Linux VM in the active
  * distro and views it over VNC on loopback. Lists imported disk images with
@@ -614,6 +775,7 @@ private fun SystemVmSection(
     images: List<SystemVmManager.VmImage>,
     busy: Boolean,
     onImport: () -> Unit,
+    onUpgradeQemu11: () -> Unit,
     onStart: (SystemVmManager.VmImage) -> Unit,
     onStop: () -> Unit,
     onDelete: (SystemVmManager.VmImage) -> Unit,
@@ -670,11 +832,14 @@ private fun SystemVmSection(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(img.label, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
-                        // Arch alongside the size: it's chosen at import and
-                        // then invisible, which makes two similarly-named
-                        // images impossible to tell apart.
+                        val extras = buildList {
+                            add(img.arch.id)
+                            if (img.gpuMode != VmGpuMode.STD) add(img.gpuMode.id)
+                            if (img.uefi) add("UEFI")
+                            if (img.tpm2) add("TPM2")
+                        }.joinToString(" · ")
                         Text(
-                            "%,d MB · %s".format(img.sizeBytes / (1024 * 1024), img.arch.id),
+                            "%,d MB · %s".format(img.sizeBytes / (1024 * 1024), extras),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -699,13 +864,20 @@ private fun SystemVmSection(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = onImport, enabled = !busy) {
                 Text(stringResource(AppR.string.app_system_vm_import))
             }
+            TextButton(onClick = onUpgradeQemu11, enabled = !busy) {
+                Text(stringResource(AppR.string.app_system_vm_upgrade_qemu11))
+            }
             if (busy) {
-                Spacer(Modifier.width(8.dp))
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(4.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .align(Alignment.CenterVertically),
+                )
             }
         }
     }
@@ -1015,9 +1187,15 @@ private fun SystemVmImportDialog(
     label: String,
     source: String,
     arch: VmArch,
+    gpuMode: VmGpuMode,
+    uefi: Boolean,
+    tpm2: Boolean,
     onLabelChange: (String) -> Unit,
     onSourceChange: (String) -> Unit,
     onArchChange: (VmArch) -> Unit,
+    onGpuModeChange: (VmGpuMode) -> Unit,
+    onUefiChange: (Boolean) -> Unit,
+    onTpm2Change: (Boolean) -> Unit,
     onImport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1052,7 +1230,20 @@ private fun SystemVmImportDialog(
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                SystemVmImportFields(label, source, arch, onLabelChange, onSourceChange, onArchChange)
+                SystemVmImportFields(
+                    label = label,
+                    source = source,
+                    arch = arch,
+                    gpuMode = gpuMode,
+                    uefi = uefi,
+                    tpm2 = tpm2,
+                    onLabelChange = onLabelChange,
+                    onSourceChange = onSourceChange,
+                    onArchChange = onArchChange,
+                    onGpuModeChange = onGpuModeChange,
+                    onUefiChange = onUefiChange,
+                    onTpm2Change = onTpm2Change,
+                )
             }
         }
     } else {
@@ -1060,11 +1251,21 @@ private fun SystemVmImportDialog(
             onDismissRequest = onDismiss,
             title = { Text(stringResource(AppR.string.app_system_vm_import_title)) },
             text = {
-                // Scrollable: M3 doesn't scroll the text slot for you, and the arch
-                // row pushed this past what a small portrait phone shows at a large
-                // font scale.
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    SystemVmImportFields(label, source, arch, onLabelChange, onSourceChange, onArchChange)
+                    SystemVmImportFields(
+                        label = label,
+                        source = source,
+                        arch = arch,
+                        gpuMode = gpuMode,
+                        uefi = uefi,
+                        tpm2 = tpm2,
+                        onLabelChange = onLabelChange,
+                        onSourceChange = onSourceChange,
+                        onArchChange = onArchChange,
+                        onGpuModeChange = onGpuModeChange,
+                        onUefiChange = onUefiChange,
+                        onTpm2Change = onTpm2Change,
+                    )
                 }
             },
             confirmButton = {
@@ -1088,9 +1289,15 @@ private fun SystemVmImportFields(
     label: String,
     source: String,
     arch: VmArch,
+    gpuMode: VmGpuMode,
+    uefi: Boolean,
+    tpm2: Boolean,
     onLabelChange: (String) -> Unit,
     onSourceChange: (String) -> Unit,
     onArchChange: (VmArch) -> Unit,
+    onGpuModeChange: (VmGpuMode) -> Unit,
+    onUefiChange: (Boolean) -> Unit,
+    onTpm2Change: (Boolean) -> Unit,
 ) {
     OutlinedTextField(
         value = label,
@@ -1128,6 +1335,52 @@ private fun SystemVmImportFields(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    Spacer(Modifier.height(12.dp))
+    Text(
+        stringResource(AppR.string.app_system_vm_import_gpu),
+        style = MaterialTheme.typography.titleSmall,
+    )
+    Spacer(Modifier.height(4.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        VmGpuMode.entries.forEach { candidate ->
+            FilterChip(
+                selected = gpuMode == candidate,
+                onClick = { onGpuModeChange(candidate) },
+                label = { Text(candidate.id) },
+            )
+        }
+    }
+    if (arch == VmArch.X86_64) {
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onUefiChange(!uefi) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(AppR.string.app_system_vm_import_uefi),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = uefi, onCheckedChange = onUefiChange)
+        }
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onTpm2Change(!tpm2) }
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            stringResource(AppR.string.app_system_vm_import_tpm2),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = tpm2, onCheckedChange = onTpm2Change)
+    }
 }
 
 /** The global "Default display" defaults (resolution + scale) for all app windows. */
@@ -1529,6 +1782,45 @@ private fun dnsModeLabel(mode: ProotDnsMode): String = when (mode) {
     ProotDnsMode.SYSTEM -> stringResource(AppR.string.app_desktop_dns_mode_system)
     ProotDnsMode.PUBLIC -> stringResource(AppR.string.app_desktop_dns_mode_public)
     ProotDnsMode.CUSTOM -> stringResource(AppR.string.app_desktop_dns_mode_custom)
+}
+
+/**
+ * Container engine selector (#573). Rendered only when `libchrootng.so` is
+ * packaged (`arm64-v8a` builds) so `x86_64` / `armeabi-v7a` hosts never show a
+ * dead option. Uses `FilterChip`s per Haven's enum-picker convention.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GuestEngineRow(
+    engine: ProotManager.GuestEngine,
+    onSelectEngine: (ProotManager.GuestEngine) -> Unit,
+) {
+    Text(
+        stringResource(AppR.string.app_desktop_engine_title),
+        style = MaterialTheme.typography.titleSmall,
+    )
+    Spacer(Modifier.height(2.dp))
+    Text(
+        stringResource(AppR.string.app_desktop_engine_description),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(4.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ProotManager.GuestEngine.entries.forEach { candidate ->
+            FilterChip(
+                selected = candidate == engine,
+                onClick = { onSelectEngine(candidate) },
+                label = { Text(guestEngineLabel(candidate)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun guestEngineLabel(engine: ProotManager.GuestEngine): String = when (engine) {
+    ProotManager.GuestEngine.PROOT -> stringResource(AppR.string.app_desktop_engine_proot)
+    ProotManager.GuestEngine.CHROOT_NG -> stringResource(AppR.string.app_desktop_engine_chroot_ng)
 }
 
 /**
@@ -2519,6 +2811,14 @@ private fun DesktopManagerSection(
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider()
                 ExpandableSection(title = stringResource(AppR.string.app_desktop_options_section)) {
+                    if (viewModel.chrootNgAvailable) {
+                        val guestEngine by viewModel.guestEngine.collectAsState()
+                        GuestEngineRow(
+                            engine = guestEngine,
+                            onSelectEngine = { viewModel.setGuestEngine(it) },
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     if (installedDistros.any { MirrorCatalog.hasMirrors(it.id) }) {
                         MirrorRegionRow(region = mirrorRegion, onSelect = onSetMirrorRegion)
                         Spacer(Modifier.height(8.dp))
